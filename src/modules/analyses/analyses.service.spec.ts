@@ -38,12 +38,18 @@ function makeDeps() {
         if (!found || found.datasetId !== where.datasetId) return null;
         return found;
       }),
+      delete: vi.fn(async ({ where }: any) => {
+        const found = analysesById.get(where.id);
+        analysesById.delete(where.id);
+        return found;
+      }),
     },
   };
 
   const storage = {
     resolvePath: vi.fn((key: string) => `/storage/${key}`),
     ensureDir: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined),
   };
 
   const analysisService = {
@@ -233,5 +239,40 @@ describe('AnalysesService: editar un análisis guardado', () => {
     await expect(
       service.update('ds-1', 'an-1', baseDto({ slug: 'mismo-slug' }) as any),
     ).resolves.toMatchObject({ status: 'DONE' });
+  });
+});
+
+describe('AnalysesService.remove', () => {
+  it('borra la fila y el parquet materializado si lo llegó a generar', async () => {
+    const { prisma, storage, analysisService, analysesById } = makeDeps();
+    addAnalysis(analysesById, 'an-1', 'ds-1', 'slug-1');
+    analysesById.get('an-1').resultStorageKey = 'analyses/an-1.parquet';
+
+    const service = new AnalysesService(prisma as any, storage as any, analysisService as any);
+    await service.remove('ds-1', 'an-1');
+
+    expect(analysesById.has('an-1')).toBe(false);
+    expect(storage.remove).toHaveBeenCalledWith('analyses/an-1.parquet');
+  });
+
+  it('no intenta borrar ningún archivo si el análisis nunca llegó a generar resultado', async () => {
+    const { prisma, storage, analysisService, analysesById } = makeDeps();
+    addAnalysis(analysesById, 'an-1', 'ds-1', 'slug-1');
+    analysesById.get('an-1').resultStorageKey = null;
+
+    const service = new AnalysesService(prisma as any, storage as any, analysisService as any);
+    await service.remove('ds-1', 'an-1');
+
+    expect(analysesById.has('an-1')).toBe(false);
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('rechaza borrar un análisis de OTRO dataset', async () => {
+    const { prisma, storage, analysisService, analysesById } = makeDeps();
+    addAnalysis(analysesById, 'an-1', 'ds-1', 'slug-1');
+
+    const service = new AnalysesService(prisma as any, storage as any, analysisService as any);
+    await expect(service.remove('ds-2', 'an-1')).rejects.toBeInstanceOf(NotFoundException);
+    expect(analysesById.has('an-1')).toBe(true);
   });
 });

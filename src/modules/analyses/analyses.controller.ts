@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { OrgRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { OrgRolesGuard } from '../../shared/guards/org-roles.guard.js';
@@ -65,6 +65,13 @@ export class AnalysesController {
     @Body() dto: CreateAnalysisDto,
   ) {
     return this.analysesService.update(datasetId, analysisId, dto);
+  }
+
+  @Delete(':analysisId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @OrgRoles(OrgRole.ADMIN)
+  remove(@Param('datasetId') datasetId: string, @Param('analysisId') analysisId: string) {
+    return this.analysesService.remove(datasetId, analysisId);
   }
 
   @Get(':analysisId/vizcanvas-handoff')

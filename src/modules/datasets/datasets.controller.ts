@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { OrgRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { OrgRolesGuard } from '../../shared/guards/org-roles.guard.js';
@@ -31,5 +31,12 @@ export class DatasetsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.datasetsService.create(organizationId, dto, user.id);
+  }
+
+  @Delete(':datasetId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @OrgRoles(OrgRole.ADMIN)
+  remove(@Param('organizationId') organizationId: string, @Param('datasetId') datasetId: string) {
+    return this.datasetsService.remove(organizationId, datasetId);
   }
 }

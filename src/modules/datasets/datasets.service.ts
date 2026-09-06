@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { LocalStorageService } from '../storage/local-storage.service.js';
 import type { CreateDatasetDto } from './dto/create-dataset.dto.js';
 
 @Injectable()
 export class DatasetsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: LocalStorageService,
+  ) {}
 
   findAllByOrganization(organizationId: string) {
     return this.prisma.dataset.findMany({
@@ -66,5 +70,21 @@ export class DatasetsService {
     }
 
     return created;
+  }
+  
+  async remove(organizationId: string, datasetId: string): Promise<void> {
+    const dataset = await this.findOne(organizationId, datasetId);
+
+    await this.prisma.dataset.updateMany({ where: { revisionOfId: datasetId }, data: { revisionOfId: null } });
+    await this.prisma.dataset.updateMany({ where: { supersededById: datasetId }, data: { supersededById: null } });
+
+    const analyses = await this.prisma.analysis.findMany({ where: { datasetId }, select: { resultStorageKey: true } });
+
+    await this.prisma.dataset.delete({ where: { id: dataset.id } });
+
+    await Promise.all([
+      this.storage.removeDir(datasetId),
+      ...analyses.filter((a) => a.resultStorageKey).map((a) => this.storage.remove(a.resultStorageKey!)),
+    ]);
   }
 }

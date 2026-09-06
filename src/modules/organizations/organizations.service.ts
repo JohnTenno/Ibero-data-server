@@ -1,12 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { OrgRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { LocalStorageService } from '../storage/local-storage.service.js';
 import type { CreateOrganizationDto } from './dto/create-organization.dto.js';
 import type { AddMemberDto } from './dto/add-member.dto.js';
 
 @Injectable()
 export class OrganizationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: LocalStorageService,
+  ) {}
 
   findAll() {
     return this.prisma.organization.findMany({
@@ -59,5 +63,21 @@ export class OrganizationsService {
     return this.prisma.organizationMember.delete({
       where: { userId_organizationId: { userId, organizationId } },
     });
+  }
+
+  async remove(organizationId: string): Promise<void> {
+    await this.findOne(organizationId);
+
+    const [datasets, analyses] = await Promise.all([
+      this.prisma.dataset.findMany({ where: { organizationId }, select: { id: true } }),
+      this.prisma.analysis.findMany({ where: { dataset: { organizationId } }, select: { resultStorageKey: true } }),
+    ]);
+
+    await this.prisma.organization.delete({ where: { id: organizationId } });
+
+    await Promise.all([
+      ...datasets.map((d) => this.storage.removeDir(d.id)),
+      ...analyses.filter((a) => a.resultStorageKey).map((a) => this.storage.remove(a.resultStorageKey!)),
+    ]);
   }
 }

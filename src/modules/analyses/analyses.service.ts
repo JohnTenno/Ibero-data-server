@@ -232,4 +232,12 @@ export class AnalysesService {
     const path = this.storage.resolvePath(analysis.resultStorageKey);
     return this.analysisService.runQuery(path, 'SELECT * FROM data LIMIT 1000');
   }
+
+  async remove(datasetId: string, analysisId: string): Promise<void> {
+    const analysis = await this.findOne(datasetId, analysisId);
+    await this.prisma.analysis.delete({ where: { id: analysisId } });
+    if (analysis.resultStorageKey) {
+      await this.storage.remove(analysis.resultStorageKey);
+    }
+  }
 }
