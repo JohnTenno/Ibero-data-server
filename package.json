@@ -10,7 +10,7 @@
     "build": "nest build",
     "deploy": "nest deploy",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "setup:dev": "docker compose up -d --wait db && prisma generate && prisma migrate deploy",
+    "setup:dev": "docker compose up -d --wait db && prisma generate && prisma migrate deploy && prisma db seed",
     "prestart": "npm run setup:dev",
     "start": "nest start --watch",
     "start:once": "nest start",
@@ -26,7 +26,8 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "prisma db seed"
   },
   "dependencies": {
     "@duckdb/node-api": "^1.5.5-r.4",
