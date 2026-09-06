@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrgRole {
+  ADMIN
+  EDITOR
+  MEMBER
+}
+
+enum DatasetVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+// Catálogo cerrado de programas/encuestas, tomado de ckanext-duckdb
+// (scheming/dataset_schema.yaml). "OTRA" cubre lo que no encaje.
+enum Survey {
+  ENIGH
+  ENOE
+  INPC
+  ENADID
+  ENVIPE
+  CENSO
+  ENDUTIH
+  OTRA
+}
+
+enum PeriodType {
+  ANNUAL
+  QUARTERLY
+  MONTHLY
+  BIANNUAL
+  ONE_TIME
+  MULTIYEAR
+}
+
+enum AnalysisStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  isSysadmin   Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships   OrganizationMember[]
+  ownedDatasets Dataset[]
+  analyses      Analysis[]
+
+  @@map("users")
+}
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members  OrganizationMember[]
+  datasets Dataset[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  role           OrgRole  @default(MEMBER)
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@map("organization_members")
+}
+
+model Dataset {
+  id             String            @id @default(uuid())
+  organizationId String
+  ownerId        String
+  title          String
+  slug           String            @unique
+  description    String?
+  visibility     DatasetVisibility @default(PRIVATE)
+
+  // ---- Clasificación temática (ckanext-duckdb dataset_schema.yaml) ----
+  survey     Survey?
+  year       Int?
+  periodType PeriodType?
+
+  // ---- Fuente y descubribilidad ----
+  sourceOrg String?
+  sourceUrl String?
+  tags      String[] @default([])
+  licenseId String?
+
+  // ---- Versionado ----
+  revision       Int      @default(1)
+  revisionOfId   String?
+  revisionOf     Dataset?  @relation("DatasetRevisions", fields: [revisionOfId], references: [id])
+  revisions      Dataset[] @relation("DatasetRevisions")
+  changelog      String?
+  supersededById String?  @unique
+  supersededBy   Dataset? @relation("DatasetSupersession", fields: [supersededById], references: [id])
+  supersedes     Dataset? @relation("DatasetSupersession")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner        User         @relation(fields: [ownerId], references: [id])
+  resources    Resource[]
+  analyses     Analysis[]
+
+  @@map("datasets")
+}
+
+model Resource {
+  id         String   @id @default(uuid())
+  datasetId  String
+  filename   String
+  format     String
+  sizeBytes  Int
+  storageKey String
+  /// Schema del parquet capturado al subir: [{ name, type }]. Se usa para
+  /// poblar el selector de columnas del step-builder y validar el recipe
+  /// antes de correrlo (igual que parquet_schema en ckanext-duckdb).
+  columns    Json?
+  createdAt  DateTime @default(now())
+
+  dataset  Dataset    @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  analyses Analysis[]
+
+  @@map("resources")
+}
+
+/// Un análisis guardado: la "receta" (steps) + metadata + resultado
+/// materializado a Parquet. Equivalente a los datasets `dataset_type: analysis`
+/// de ckanext-duckdb, pero como entidad propia en vez de un Dataset completo
+/// (no necesitábamos todo el aparato de organización/miembros para esto).
+model Analysis {
+  id               String         @id @default(uuid())
+  datasetId        String
+  sourceResourceId String
+  title            String
+  slug             String         @unique
+  folder           String
+  description      String?
+  visibility       DatasetVisibility @default(PRIVATE)
+  /// Los steps tal como los mandó el step-builder: [{ op, params }, ...]
+  recipe           Json
+  status           AnalysisStatus @default(PENDING)
+  errorMessage     String?
+  resultStorageKey String?
+  resultRowCount   Int?
+  /// [{ name, type }] del resultado, para poder mostrar la tabla sin releer el parquet.
+  resultColumns    Json?
+  createdById      String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  dataset        Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  sourceResource Resource @relation(fields: [sourceResourceId], references: [id])
+  createdBy      User     @relation(fields: [createdById], references: [id])
+
+  @@map("analyses")
+}
