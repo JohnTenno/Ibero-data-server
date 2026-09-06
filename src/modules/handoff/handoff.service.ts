@@ -39,6 +39,7 @@ export class HandoffService {
     result: { downloadUrl: string; filename: string },
     source: { downloadUrl: string; filename: string },
     vizCanvasRecipe: Record<string, unknown>,
+    joinResources: { alias: string; downloadUrl: string; filename: string }[] = [],
   ): string {
     const token = this.createToken(user);
     const pipeline = Buffer.from(JSON.stringify(vizCanvasRecipe)).toString('base64url');
@@ -52,6 +53,14 @@ export class HandoffService {
       source_resource_name: this.safeName(source.filename),
       pipeline,
     });
+    if (joinResources.length > 0) {
+      const encoded = joinResources.map((j) => ({
+        alias: j.alias,
+        url: j.downloadUrl,
+        name: this.safeName(j.filename),
+      }));
+      params.set('join_resources', Buffer.from(JSON.stringify(encoded)).toString('base64url'));
+    }
     return `${this.vizcanvasUrl()}?${params.toString()}`;
   }
 

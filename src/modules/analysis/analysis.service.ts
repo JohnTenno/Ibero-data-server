@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import { assertReadOnlySelect } from './sql-sanitizer.js';
-import { buildRecipeSql, type Recipe } from './recipe.js';
+import { buildRecipeSql, quoteIdent, type Recipe } from './recipe.js';
 
 export interface QueryResult {
   columns: string[];
@@ -11,6 +11,11 @@ export interface QueryResult {
 export interface ColumnInfo {
   name: string;
   type: string;
+}
+
+export interface NamedSource {
+  alias: string;
+  path: string;
 }
 
 const MAX_ROWS = 10_000;
@@ -24,27 +29,36 @@ function stripTrailingSemicolon(sql: string): string {
   return trimmed.endsWith(';') ? trimmed.slice(0, -1) : trimmed;
 }
 
-function safeDuckDbError(err: unknown, parquetPath: string): BadRequestException {
-  const message = err instanceof Error ? err.message : 'Error desconocido de DuckDB.';
-  return new BadRequestException(message.split(parquetPath).join('<archivo>'));
+function safeDuckDbError(err: unknown, paths: string[]): BadRequestException {
+  let message = err instanceof Error ? err.message : 'Error desconocido de DuckDB.';
+  for (const path of paths) {
+    message = message.split(path).join('<archivo>');
+  }
+  return new BadRequestException(message);
 }
 
 @Injectable()
 export class AnalysisService {
-  private async withDataView<T>(
-    parquetPath: string,
+  private async withViews<T>(
+    sources: NamedSource[],
     fn: (connection: DuckDBConnection) => Promise<T>,
   ): Promise<T> {
     const instance = await DuckDBInstance.create(':memory:');
     const connection = await instance.connect();
     try {
-      await connection.run(
-        `CREATE OR REPLACE TEMP VIEW data AS SELECT * FROM read_parquet('${escapeSqlLiteral(parquetPath)}')`,
-      );
+      for (const source of sources) {
+        await connection.run(
+          `CREATE OR REPLACE TEMP VIEW ${quoteIdent(source.alias)} AS SELECT * FROM read_parquet('${escapeSqlLiteral(source.path)}')`,
+        );
+      }
       return await fn(connection);
     } finally {
       connection.closeSync();
     }
+  }
+
+  private withDataView<T>(parquetPath: string, fn: (connection: DuckDBConnection) => Promise<T>): Promise<T> {
+    return this.withViews([{ alias: 'data', path: parquetPath }], fn);
   }
 
   async runQuery(parquetPath: string, sql: string): Promise<QueryResult> {
@@ -61,7 +75,7 @@ export class AnalysisService {
       });
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
-      throw safeDuckDbError(err, parquetPath);
+      throw safeDuckDbError(err, [parquetPath]);
     }
   }
 
@@ -75,14 +89,20 @@ export class AnalysisService {
         }));
       });
     } catch (err) {
-      throw safeDuckDbError(err, parquetPath);
+      throw safeDuckDbError(err, [parquetPath]);
     }
   }
 
-  async runRecipe(parquetPath: string, recipe: Recipe, limit: number | null): Promise<QueryResult> {
+  async runRecipe(
+    parquetPath: string,
+    recipe: Recipe,
+    limit: number | null,
+    joinSources: NamedSource[] = [],
+  ): Promise<QueryResult> {
     const { sql, params } = buildRecipeSql(recipe, limit);
+    const sources = [{ alias: 'data', path: parquetPath }, ...joinSources];
     try {
-      return await this.withDataView(parquetPath, async (connection) => {
+      return await this.withViews(sources, async (connection) => {
         const prepared = await connection.prepare(sql);
         params.forEach((value, i) => {
           const idx = i + 1;
@@ -99,14 +119,23 @@ export class AnalysisService {
         };
       });
     } catch (err) {
-      throw safeDuckDbError(err, parquetPath);
+      throw safeDuckDbError(
+        err,
+        sources.map((s) => s.path),
+      );
     }
   }
 
-  async writeRecipeResult(parquetPath: string, recipe: Recipe, destPath: string): Promise<void> {
+  async writeRecipeResult(
+    parquetPath: string,
+    recipe: Recipe,
+    destPath: string,
+    joinSources: NamedSource[] = [],
+  ): Promise<void> {
     const { sql, params } = buildRecipeSql(recipe, null);
+    const sources = [{ alias: 'data', path: parquetPath }, ...joinSources];
     try {
-      await this.withDataView(parquetPath, async (connection) => {
+      await this.withViews(sources, async (connection) => {
         const prepared = await connection.prepare(
           `COPY (${sql}) TO '${escapeSqlLiteral(destPath)}' (FORMAT PARQUET)`,
         );
@@ -121,7 +150,10 @@ export class AnalysisService {
         await prepared.run();
       });
     } catch (err) {
-      throw safeDuckDbError(err, parquetPath);
+      throw safeDuckDbError(
+        err,
+        sources.map((s) => s.path),
+      );
     }
   }
 }

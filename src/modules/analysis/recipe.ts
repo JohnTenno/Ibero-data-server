@@ -2,7 +2,14 @@ import { BadRequestException } from '@nestjs/common';
 export const ALLOWED_AGG_FUNCS = new Set(['SUM', 'AVG', 'COUNT', 'MIN', 'MAX', 'MEDIAN']);
 export const ALLOWED_OPERATORS = new Set(['=', '!=', '<', '<=', '>', '>=']);
 export const ALLOWED_SORT_DIRS = new Set(['asc', 'desc']);
+export const ALLOWED_JOIN_TYPES = new Set(['inner', 'left']);
 export const OP_CATALOG = {
+  join: {
+    kind: 'join',
+    description:
+      'Cruza este dataset con otro resource por una columna en común (ej: hogares + personas por folio). El otro resource debe ser del mismo dataset.',
+    params: ['resourceId', 'alias', 'type', 'onLeft', 'onRight'],
+  },
   group_by: {
     kind: 'group',
     description: 'Agrupa las filas por una o más columnas. Úsalo con cálculos para resumir por grupo.',
@@ -48,7 +55,16 @@ export interface Step {
   params?: Record<string, unknown>;
 }
 
+export interface JoinSpec {
+  resourceId: string;
+  alias: string;
+  type: string;
+  onLeft: string;
+  onRight: string;
+}
+
 export interface Recipe {
+  joins: JoinSpec[];
   computes: { left: string | number; right: string | number; as: string }[];
   filters: { column: string; operator: string; value: string | number }[];
   groupBy: string[];
@@ -62,8 +78,24 @@ export interface Recipe {
 export function quoteIdent(name: string): string {
   return '"' + String(name).replace(/"/g, '""') + '"';
 }
+function requireField(value: unknown, message: string): string {
+  const s = value === undefined || value === null ? '' : String(value).trim();
+  if (s === '') {
+    throw new BadRequestException(message);
+  }
+  return s;
+}
+
+function requireOperand(value: unknown, message: string): string | number {
+  if (typeof value === 'number') {
+    return value;
+  }
+  return requireField(value, message);
+}
+
 export function stepsToInternal(steps: Step[]): Recipe {
   const recipe: Recipe = {
+    joins: [],
     computes: [],
     filters: [],
     groupBy: [],
@@ -81,40 +113,70 @@ export function stepsToInternal(steps: Step[]): Recipe {
       throw new BadRequestException(`Operación desconocida: ${step.op}`);
     }
     switch (op) {
-      case 'group_by':
-        recipe.groupBy = Array.isArray(p.columns) ? (p.columns as string[]) : [];
+      case 'join':
+        recipe.joins.push({
+          resourceId: requireField(p.resourceId, 'Falta elegir el recurso a cruzar en el paso "Cruzar con otro recurso".'),
+          alias: requireField(p.alias, 'Falta el alias del recurso cruzado en el paso "Cruzar con otro recurso".'),
+          type: requireField(p.type, 'Falta el tipo de cruce (inner/left) en el paso "Cruzar con otro recurso".'),
+          onLeft: requireField(p.onLeft, 'Falta la columna de este recurso en el paso "Cruzar con otro recurso".'),
+          onRight: requireField(p.onRight, 'Falta la columna del recurso cruzado en el paso "Cruzar con otro recurso".'),
+        });
         break;
+      case 'group_by': {
+        const columns = Array.isArray(p.columns)
+          ? (p.columns as unknown[]).filter((c): c is string => typeof c === 'string' && c.trim() !== '')
+          : [];
+        if (columns.length === 0) {
+          throw new BadRequestException('El paso "Agrupar por" necesita al menos una columna seleccionada.');
+        }
+        recipe.groupBy = columns;
+        break;
+      }
       case 'aggregate':
         recipe.aggregates.push({
-          func: String(p.func),
-          column: String(p.column),
-          as: String(p.as),
+          func: requireField(p.func, 'Falta la función en el paso "Calcular".'),
+          column: requireField(p.column, 'Falta la columna en el paso "Calcular".'),
+          as: requireField(p.as, 'Falta el nombre del resultado en el paso "Calcular".'),
           distinct: Boolean(p.distinct),
         });
         break;
       case 'compute':
         recipe.computes.push({
-          left: p.left as string | number,
-          right: p.right as string | number,
-          as: String(p.as),
+          left: requireOperand(p.left, 'Falta la columna A en el paso "Crear columna".'),
+          right: requireOperand(p.right, 'Falta la columna B (o número) en el paso "Crear columna".'),
+          as: requireField(p.as, 'Falta el nombre del resultado en el paso "Crear columna".'),
         });
         break;
       case 'filter':
         recipe.filters.push({
-          column: String(p.column),
-          operator: String(p.operator),
+          column: requireField(p.column, 'Falta la columna en el paso "Filtrar filas".'),
+          operator: requireField(p.operator, 'Falta el operador en el paso "Filtrar filas".'),
           value: p.value as string | number,
         });
         break;
       case 'percentage':
-        recipe.percentage = { of: String(p.of), as: String(p.as) };
+        recipe.percentage = {
+          of: requireField(p.of, 'Falta elegir el agregado de referencia en el paso "Convertir a porcentaje".'),
+          as: requireField(p.as, 'Falta el nombre del resultado en el paso "Convertir a porcentaje".'),
+        };
         break;
       case 'sort':
-        recipe.sort.push({ column: String(p.column), dir: String(p.dir) });
+        recipe.sort.push({
+          column: requireField(p.column, 'Falta la columna en el paso "Ordenar".'),
+          dir: requireField(p.dir, 'Falta la dirección en el paso "Ordenar".'),
+        });
         break;
-      case 'limit':
-        recipe.limit = p.n !== undefined && p.n !== null ? Number(p.n) : null;
+      case 'limit': {
+        if (p.n === undefined || p.n === null || String(p.n).trim() === '') {
+          throw new BadRequestException('Falta el número de filas en el paso "Limitar filas".');
+        }
+        const n = Number(p.n);
+        if (!Number.isFinite(n) || n <= 0) {
+          throw new BadRequestException('El número de filas en "Limitar filas" debe ser mayor a 0.');
+        }
+        recipe.limit = n;
         break;
+      }
     }
   }
   return recipe;
@@ -133,6 +195,13 @@ function computeOperand(operand: string | number): string {
 
 export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { sql: string; params: (string | number)[] } {
   let fromClause = 'data';
+  for (const j of recipe.joins) {
+    if (!ALLOWED_JOIN_TYPES.has(j.type)) {
+      throw new BadRequestException(`Tipo de join no permitido: ${j.type}`);
+    }
+    const alias = quoteIdent(j.alias);
+    fromClause += ` ${j.type.toUpperCase()} JOIN ${alias} ON data.${quoteIdent(j.onLeft)} = ${alias}.${quoteIdent(j.onRight)}`;
+  }
 
   if (recipe.computes.length > 0) {
     const parts = recipe.computes.map((c) => {
@@ -140,7 +209,7 @@ export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { s
       const right = computeOperand(c.right);
       return `(${left} * ${right}) AS ${quoteIdent(c.as)}`;
     });
-    fromClause = `(SELECT *, ${parts.join(', ')} FROM data) AS data`;
+    fromClause = `(SELECT *, ${parts.join(', ')} FROM ${fromClause}) AS data`;
   }
 
   const params: (string | number)[] = [];
@@ -213,6 +282,7 @@ export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { s
 
 export function toVizCanvasRecipe(recipe: Recipe): Record<string, unknown> {
   return {
+    joins: recipe.joins,
     filters: recipe.filters,
     computes: recipe.computes,
     group_by: recipe.groupBy,

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { OrgRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { OrgRolesGuard } from '../../shared/guards/org-roles.guard.js';
@@ -56,7 +56,17 @@ export class AnalysesController {
   ) {
     return this.analysesService.create(datasetId, dto, user.id);
   }
-  
+
+  @Patch(':analysisId')
+  @OrgRoles(OrgRole.ADMIN, OrgRole.EDITOR)
+  update(
+    @Param('datasetId') datasetId: string,
+    @Param('analysisId') analysisId: string,
+    @Body() dto: CreateAnalysisDto,
+  ) {
+    return this.analysesService.update(datasetId, analysisId, dto);
+  }
+
   @Get(':analysisId/vizcanvas-handoff')
   @OrgRoles(OrgRole.ADMIN, OrgRole.EDITOR, OrgRole.MEMBER)
   async vizcanvasHandoff(
@@ -75,11 +85,23 @@ export class AnalysesController {
     const recipe = stepsToInternal(analysis.recipe as { op: string; params?: Record<string, unknown> }[]);
     const vizCanvasRecipe = toVizCanvasRecipe(recipe);
 
+    const joinResources = await Promise.all(
+      recipe.joins.map(async (join) => {
+        const joinResource = await this.resourcesService.findOne(datasetId, join.resourceId);
+        return {
+          alias: join.alias,
+          downloadUrl: `${base}/organizations/${organizationId}/datasets/${datasetId}/resources/${joinResource.id}/download`,
+          filename: joinResource.filename,
+        };
+      }),
+    );
+
     const url = this.handoffService.buildAnalysisHandoffUrl(
       user,
       { downloadUrl: resultDownloadUrl, filename: `${analysis.title}.parquet` },
       { downloadUrl: sourceDownloadUrl, filename: sourceResource.filename },
       vizCanvasRecipe,
+      joinResources,
     );
     return { url };
   }
