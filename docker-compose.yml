@@ -12,7 +12,7 @@ services:
     volumes:
       - ibero_data_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ibero"]
+      test: ["CMD-SHELL", "pg_isready -U ibero -d ibero_data"]
       interval: 10s
       timeout: 5s
       retries: 5
