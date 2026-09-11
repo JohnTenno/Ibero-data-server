@@ -17,7 +17,10 @@ export class SysadminGuard implements CanActivate {
     const user: AuthenticatedUser | undefined = request.user;
 
     if (!user?.isSysadmin) {
-      throw new ForbiddenException('Requiere privilegios de sysadmin.');
+      throw new ForbiddenException({
+        code: 'sysadmin_required',
+        message: 'Sysadmin privileges are required.',
+      });
     }
     return true;
   }

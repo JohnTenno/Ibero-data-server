@@ -36,7 +36,7 @@ export class DatasetsService {
       },
     });
     if (!dataset) {
-      throw new NotFoundException('Dataset no encontrado.');
+      throw new NotFoundException({ code: 'dataset_not_found', message: 'Dataset not found.' });
     }
     return dataset;
   }
@@ -50,10 +50,16 @@ export class DatasetsService {
         where: { id: revisionOfId, organizationId },
       });
       if (!original) {
-        throw new BadRequestException('El dataset original de la revisión no existe en esta organización.');
+        throw new BadRequestException({
+          code: 'revision_source_not_found',
+          message: 'The original dataset for this revision does not exist in this organization.',
+        });
       }
       if (original.supersededById) {
-        throw new BadRequestException('Ese dataset ya tiene una revisión más reciente.');
+        throw new BadRequestException({
+          code: 'dataset_already_superseded',
+          message: 'That dataset already has a more recent revision.',
+        });
       }
       revision = original.revision + 1;
     }

@@ -8,6 +8,6 @@ export class ImportFromIntermediarioDto {
   sourceId!: number;
 
   @IsString()
-  @Matches(/\.parquet$/i, { message: 'filename debe terminar en .parquet' })
+  @Matches(/\.parquet$/i, { message: 'filename must end with .parquet' })
   filename!: string;
 }

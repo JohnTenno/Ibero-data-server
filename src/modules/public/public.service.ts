@@ -43,10 +43,10 @@ function clampInt(value: number | undefined, fallback: number, min: number, max:
 
 const PUBLIC_DONE_ANALYSIS = { status: 'DONE' as const, dataset: { visibility: DatasetVisibility.PUBLIC } };
 
-const VISITANTE_PUBLICO: AuthenticatedUser = {
+const PUBLIC_VISITOR: AuthenticatedUser = {
   id: 'public',
-  email: 'visitante@publico.ibero-data',
-  fullName: 'Visitante público',
+  email: 'visitor@public.ibero-data',
+  fullName: 'Public visitor',
   isSysadmin: false,
 };
 
@@ -115,7 +115,10 @@ export class PublicService {
       include: { dataset: { include: { organization: true } }, sourceResource: true },
     });
     if (!analysis) {
-      throw new NotFoundException('No se encontró ese análisis en el catálogo público.');
+      throw new NotFoundException({
+        code: 'public_analysis_not_found',
+        message: 'That analysis was not found in the public catalog.',
+      });
     }
 
     const resources: PublicResource[] = [
@@ -151,7 +154,10 @@ export class PublicService {
     const safeLimit = clampInt(limit, DEFAULT_PREVIEW, 1, MAX_PREVIEW);
     const analysis = await this.prisma.analysis.findFirst({ where: { slug, ...PUBLIC_DONE_ANALYSIS } });
     if (!analysis?.resultStorageKey) {
-      throw new NotFoundException('Análisis no encontrado o no es público.');
+      throw new NotFoundException({
+        code: 'public_analysis_not_found',
+        message: 'Analysis not found or not public.',
+      });
     }
     const path = this.storage.resolvePath(analysis.resultStorageKey);
     return this.analysisService.runQuery(path, `SELECT * FROM data LIMIT ${safeLimit}`);
@@ -160,7 +166,10 @@ export class PublicService {
   async getResultFile(slug: string): Promise<{ path: string; filename: string }> {
     const analysis = await this.prisma.analysis.findFirst({ where: { slug, ...PUBLIC_DONE_ANALYSIS } });
     if (!analysis?.resultStorageKey) {
-      throw new NotFoundException('Análisis no encontrado o no es público.');
+      throw new NotFoundException({
+        code: 'public_analysis_not_found',
+        message: 'Analysis not found or not public.',
+      });
     }
     return { path: this.storage.resolvePath(analysis.resultStorageKey), filename: `${analysis.title}.parquet` };
   }
@@ -168,11 +177,17 @@ export class PublicService {
   async getDatasetResourceFile(slug: string, resourceId: string): Promise<{ path: string; filename: string }> {
     const analysis = await this.prisma.analysis.findFirst({ where: { slug, ...PUBLIC_DONE_ANALYSIS } });
     if (!analysis) {
-      throw new NotFoundException('Análisis no encontrado o no es público.');
+      throw new NotFoundException({
+        code: 'public_analysis_not_found',
+        message: 'Analysis not found or not public.',
+      });
     }
     const resource = await this.prisma.resource.findFirst({ where: { id: resourceId, datasetId: analysis.datasetId } });
     if (!resource) {
-      throw new NotFoundException('Resource no encontrado en este dataset.');
+      throw new NotFoundException({
+        code: 'resource_not_found',
+        message: 'Resource not found in this dataset.',
+      });
     }
     return { path: this.storage.resolvePath(resource.storageKey), filename: resource.filename };
   }
@@ -183,7 +198,10 @@ export class PublicService {
       include: { sourceResource: true },
     });
     if (!analysis?.sourceResource) {
-      throw new NotFoundException('Análisis no encontrado o no es público.');
+      throw new NotFoundException({
+        code: 'public_analysis_not_found',
+        message: 'Analysis not found or not public.',
+      });
     }
 
     const steps = Array.isArray(analysis.recipe) ? (analysis.recipe as unknown as Step[]) : [];
@@ -213,7 +231,7 @@ export class PublicService {
     }
 
     const url = this.handoffService.buildAnalysisHandoffUrl(
-      VISITANTE_PUBLICO,
+      PUBLIC_VISITOR,
       { downloadUrl: resultDownloadUrl, filename: `${analysis.title}.parquet` },
       { downloadUrl: sourceDownloadUrl, filename: analysis.sourceResource.filename },
       vizCanvasRecipe,
@@ -230,24 +248,24 @@ export class PublicService {
     return orgs.map((o) => ({ id: o.id, name: o.slug, title: o.name, description: o.description }));
   }
 
-  async countByOrganization(): Promise<Record<string, { fuentes: number; graficas: number }>> {
+  async countByOrganization(): Promise<Record<string, { sources: number; charts: number }>> {
     const rows = await this.prisma.analysis.findMany({
       where: PUBLIC_DONE_ANALYSIS,
       select: { datasetId: true, dataset: { select: { organization: { select: { slug: true } } } } },
     });
 
-    const graficas = new Map<string, number>();
-    const datasetsPorOrg = new Map<string, Set<string>>();
+    const charts = new Map<string, number>();
+    const datasetsByOrg = new Map<string, Set<string>>();
     for (const r of rows) {
       const slug = r.dataset.organization.slug;
-      graficas.set(slug, (graficas.get(slug) ?? 0) + 1);
-      if (!datasetsPorOrg.has(slug)) datasetsPorOrg.set(slug, new Set());
-      datasetsPorOrg.get(slug)!.add(r.datasetId);
+      charts.set(slug, (charts.get(slug) ?? 0) + 1);
+      if (!datasetsByOrg.has(slug)) datasetsByOrg.set(slug, new Set());
+      datasetsByOrg.get(slug)!.add(r.datasetId);
     }
 
-    const out: Record<string, { fuentes: number; graficas: number }> = {};
-    for (const slug of graficas.keys()) {
-      out[slug] = { fuentes: datasetsPorOrg.get(slug)?.size ?? 0, graficas: graficas.get(slug) ?? 0 };
+    const out: Record<string, { sources: number; charts: number }> = {};
+    for (const slug of charts.keys()) {
+      out[slug] = { sources: datasetsByOrg.get(slug)?.size ?? 0, charts: charts.get(slug) ?? 0 };
     }
     return out;
   }

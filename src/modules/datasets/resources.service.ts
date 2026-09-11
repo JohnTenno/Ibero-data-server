@@ -29,17 +29,23 @@ export class ResourcesService {
   async findOne(datasetId: string, resourceId: string) {
     const resource = await this.prisma.resource.findFirst({ where: { id: resourceId, datasetId } });
     if (!resource) {
-      throw new NotFoundException('Resource no encontrado.');
+      throw new NotFoundException({ code: 'resource_not_found', message: 'Resource not found.' });
     }
     return resource;
   }
 
   async upload(datasetId: string, file: { originalname: string; buffer: Buffer; size: number }) {
     if (!file.originalname.toLowerCase().endsWith('.parquet')) {
-      throw new BadRequestException('Solo se aceptan archivos .parquet.');
+      throw new BadRequestException({
+        code: 'invalid_file_extension',
+        message: 'Only .parquet files are accepted.',
+      });
     }
     if (!looksLikeParquet(file.buffer)) {
-      throw new BadRequestException('El archivo no tiene formato Parquet válido.');
+      throw new BadRequestException({
+        code: 'invalid_parquet_format',
+        message: 'The file is not a valid Parquet file.',
+      });
     }
 
     const storageKey = await this.storage.save(datasetId, file.originalname, file.buffer);
@@ -70,9 +76,10 @@ export class ResourcesService {
     try {
       await access(path);
     } catch {
-      throw new NotFoundException(
-        'El archivo de este resource ya no está en el almacenamiento (¿se borró a mano?).',
-      );
+      throw new NotFoundException({
+        code: 'resource_file_missing',
+        message: 'This resource\'s file is no longer in storage (was it deleted manually?).',
+      });
     }
     return path;
   }

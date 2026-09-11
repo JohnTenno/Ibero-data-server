@@ -53,7 +53,10 @@ export class AnalysesService {
   private async getResourceForDataset(datasetId: string, resourceId: string) {
     const resource = await this.prisma.resource.findFirst({ where: { id: resourceId, datasetId } });
     if (!resource) {
-      throw new NotFoundException('Resource no encontrado en este dataset.');
+      throw new NotFoundException({
+        code: 'resource_not_found',
+        message: 'Resource not found in this dataset.',
+      });
     }
     return resource;
   }
@@ -68,7 +71,10 @@ export class AnalysesService {
 
     for (const join of recipe.joins) {
       if (seenAliases.has(join.alias)) {
-        throw new BadRequestException(`Alias de join repetido o reservado: "${join.alias}".`);
+        throw new BadRequestException({
+          code: 'duplicate_join_alias',
+          message: `Duplicate or reserved join alias: "${join.alias}".`,
+        });
       }
       seenAliases.add(join.alias);
 
@@ -96,7 +102,10 @@ export class AnalysesService {
 
     const missing = [...required].filter((name) => !known.has(name));
     if (missing.length > 0) {
-      throw new BadRequestException(`Columna(s) inexistente(s) en los recursos: ${missing.join(', ')}`);
+      throw new BadRequestException({
+        code: 'unknown_columns',
+        message: `Unknown column(s) in resources: ${missing.join(', ')}`,
+      });
     }
   }
 
@@ -137,7 +146,7 @@ export class AnalysesService {
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error desconocido al generar el análisis.';
+      const message = err instanceof Error ? err.message : 'Unknown error while generating the analysis.';
       await this.prisma.analysis.update({
         where: { id: analysisId },
         data: { status: 'FAILED', errorMessage: message },
@@ -162,7 +171,10 @@ export class AnalysesService {
   async create(datasetId: string, dto: CreateAnalysisDto, userId: string) {
     const existingSlug = await this.prisma.analysis.findUnique({ where: { slug: dto.slug } });
     if (existingSlug) {
-      throw new ConflictException('Ya existe un análisis con ese slug.');
+      throw new ConflictException({
+        code: 'analysis_slug_taken',
+        message: 'An analysis with that slug already exists.',
+      });
     }
 
     const { resource, recipe, joinSources } = await this.prepareRecipe(datasetId, dto);
@@ -190,7 +202,10 @@ export class AnalysesService {
 
     const existingSlug = await this.prisma.analysis.findUnique({ where: { slug: dto.slug } });
     if (existingSlug && existingSlug.id !== analysisId) {
-      throw new ConflictException('Ya existe un análisis con ese slug.');
+      throw new ConflictException({
+        code: 'analysis_slug_taken',
+        message: 'An analysis with that slug already exists.',
+      });
     }
 
     const { resource, recipe, joinSources } = await this.prepareRecipe(datasetId, dto);
@@ -219,7 +234,7 @@ export class AnalysesService {
   async findOne(datasetId: string, analysisId: string) {
     const analysis = await this.prisma.analysis.findFirst({ where: { id: analysisId, datasetId } });
     if (!analysis) {
-      throw new NotFoundException('Análisis no encontrado.');
+      throw new NotFoundException({ code: 'analysis_not_found', message: 'Analysis not found.' });
     }
     return analysis;
   }
@@ -227,7 +242,10 @@ export class AnalysesService {
   async getData(datasetId: string, analysisId: string) {
     const analysis = await this.findOne(datasetId, analysisId);
     if (analysis.status !== 'DONE' || !analysis.resultStorageKey) {
-      throw new BadRequestException('Este análisis todavía no tiene un resultado listo.');
+      throw new BadRequestException({
+        code: 'analysis_result_not_ready',
+        message: 'This analysis does not have a result ready yet.',
+      });
     }
     const path = this.storage.resolvePath(analysis.resultStorageKey);
     return this.analysisService.runQuery(path, 'SELECT * FROM data LIMIT 1000');

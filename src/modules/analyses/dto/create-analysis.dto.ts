@@ -25,7 +25,7 @@ export class CreateAnalysisDto {
   title!: string;
 
   @IsString()
-  @Matches(/^[a-z0-9-]+$/, { message: 'slug solo puede tener minúsculas, números y guiones' })
+  @Matches(/^[a-z0-9-]+$/, { message: 'slug can only contain lowercase letters, numbers and hyphens' })
   slug!: string;
 
   @IsString()

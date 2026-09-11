@@ -33,7 +33,10 @@ export class OrganizationsService {
       include: { members: { include: { user: { select: { id: true, email: true, fullName: true } } } } },
     });
     if (!org) {
-      throw new NotFoundException('Organización no encontrada.');
+      throw new NotFoundException({
+        code: 'organization_not_found',
+        message: 'Organization not found.',
+      });
     }
     return org;
   }

@@ -11,7 +11,7 @@ export class UsersService {
       select: { id: true, email: true, fullName: true, isSysadmin: true, createdAt: true },
     });
     if (!user) {
-      throw new NotFoundException('Usuario no encontrado.');
+      throw new NotFoundException({ code: 'user_not_found', message: 'User not found.' });
     }
     return user;
   }

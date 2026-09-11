@@ -25,7 +25,10 @@ export class AnalysesDownloadController {
   ) {
     const analysis = await this.analysesService.findOne(datasetId, analysisId);
     if (analysis.status !== 'DONE' || !analysis.resultStorageKey) {
-      throw new BadRequestException('Este análisis todavía no tiene un resultado listo.');
+      throw new BadRequestException({
+        code: 'analysis_result_not_ready',
+        message: 'This analysis does not have a result ready yet.',
+      });
     }
     const path = this.storage.resolvePath(analysis.resultStorageKey);
     res.setHeader('Content-Type', 'application/octet-stream');

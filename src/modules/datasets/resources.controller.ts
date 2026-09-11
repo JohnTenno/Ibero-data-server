@@ -48,7 +48,10 @@ export class ResourcesController {
   )
   upload(@Param('datasetId') datasetId: string, @UploadedFile() file?: Express.Multer.File) {
     if (!file) {
-      throw new BadRequestException('Falta el archivo (campo "file").');
+      throw new BadRequestException({
+        code: 'file_required',
+        message: 'Missing file (field "file").',
+      });
     }
     return this.resourcesService.upload(datasetId, file);
   }

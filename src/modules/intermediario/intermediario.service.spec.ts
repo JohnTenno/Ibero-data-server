@@ -71,7 +71,7 @@ describe('IntermediarioService', () => {
 
       const service = new IntermediarioService(makeConfigService());
       await expect(service.listCatalog()).rejects.toBeInstanceOf(BadGatewayException);
-      await expect(service.listCatalog()).rejects.toThrow(/no se pudo contactar/i);
+      await expect(service.listCatalog()).rejects.toThrow(/could not reach the intermediario/i);
     });
 
     it('si el intermediario responde con error HTTP, también da 502 (no deja pasar un 404/500 crudo)', async () => {

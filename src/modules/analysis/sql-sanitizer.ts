@@ -6,19 +6,28 @@ const FORBIDDEN_KEYWORDS =
 export function assertReadOnlySelect(sql: string): void {
   const trimmed = sql.trim();
   if (!trimmed) {
-    throw new BadRequestException('La consulta no puede estar vacía.');
+    throw new BadRequestException({ code: 'query_empty', message: 'The query cannot be empty.' });
   }
 
   const withoutTrailingSemicolon = trimmed.endsWith(';') ? trimmed.slice(0, -1) : trimmed;
   if (withoutTrailingSemicolon.includes(';')) {
-    throw new BadRequestException('Solo se permite una sentencia por consulta.');
+    throw new BadRequestException({
+      code: 'query_multiple_statements',
+      message: 'Only one statement per query is allowed.',
+    });
   }
 
   if (!/^(select|with)\b/i.test(withoutTrailingSemicolon)) {
-    throw new BadRequestException('Solo se permiten consultas SELECT.');
+    throw new BadRequestException({
+      code: 'query_select_only',
+      message: 'Only SELECT queries are allowed.',
+    });
   }
 
   if (FORBIDDEN_KEYWORDS.test(withoutTrailingSemicolon)) {
-    throw new BadRequestException('La consulta contiene una palabra no permitida.');
+    throw new BadRequestException({
+      code: 'query_forbidden_keyword',
+      message: 'The query contains a keyword that is not allowed.',
+    });
   }
 }

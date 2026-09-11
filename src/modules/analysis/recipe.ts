@@ -78,19 +78,19 @@ export interface Recipe {
 export function quoteIdent(name: string): string {
   return '"' + String(name).replace(/"/g, '""') + '"';
 }
-function requireField(value: unknown, message: string): string {
+function requireField(value: unknown, code: string, message: string): string {
   const s = value === undefined || value === null ? '' : String(value).trim();
   if (s === '') {
-    throw new BadRequestException(message);
+    throw new BadRequestException({ code, message });
   }
   return s;
 }
 
-function requireOperand(value: unknown, message: string): string | number {
+function requireOperand(value: unknown, code: string, message: string): string | number {
   if (typeof value === 'number') {
     return value;
   }
-  return requireField(value, message);
+  return requireField(value, code, message);
 }
 
 export function stepsToInternal(steps: Step[]): Recipe {
@@ -110,16 +110,19 @@ export function stepsToInternal(steps: Step[]): Recipe {
     const op = step.op as OpName;
     const p = step.params ?? {};
     if (!(op in OP_CATALOG)) {
-      throw new BadRequestException(`Operación desconocida: ${step.op}`);
+      throw new BadRequestException({
+        code: 'unknown_operation',
+        message: `Unknown operation: ${step.op}`,
+      });
     }
     switch (op) {
       case 'join':
         recipe.joins.push({
-          resourceId: requireField(p.resourceId, 'Falta elegir el recurso a cruzar en el paso "Cruzar con otro recurso".'),
-          alias: requireField(p.alias, 'Falta el alias del recurso cruzado en el paso "Cruzar con otro recurso".'),
-          type: requireField(p.type, 'Falta el tipo de cruce (inner/left) en el paso "Cruzar con otro recurso".'),
-          onLeft: requireField(p.onLeft, 'Falta la columna de este recurso en el paso "Cruzar con otro recurso".'),
-          onRight: requireField(p.onRight, 'Falta la columna del recurso cruzado en el paso "Cruzar con otro recurso".'),
+          resourceId: requireField(p.resourceId, 'join_resource_required', 'Missing resource to join in the "Join" step.'),
+          alias: requireField(p.alias, 'join_alias_required', 'Missing alias for the joined resource in the "Join" step.'),
+          type: requireField(p.type, 'join_type_required', 'Missing join type (inner/left) in the "Join" step.'),
+          onLeft: requireField(p.onLeft, 'join_on_left_required', 'Missing column for this resource in the "Join" step.'),
+          onRight: requireField(p.onRight, 'join_on_right_required', 'Missing column for the joined resource in the "Join" step.'),
         });
         break;
       case 'group_by': {
@@ -127,52 +130,61 @@ export function stepsToInternal(steps: Step[]): Recipe {
           ? (p.columns as unknown[]).filter((c): c is string => typeof c === 'string' && c.trim() !== '')
           : [];
         if (columns.length === 0) {
-          throw new BadRequestException('El paso "Agrupar por" necesita al menos una columna seleccionada.');
+          throw new BadRequestException({
+            code: 'group_by_columns_required',
+            message: 'The "Group by" step needs at least one selected column.',
+          });
         }
         recipe.groupBy = columns;
         break;
       }
       case 'aggregate':
         recipe.aggregates.push({
-          func: requireField(p.func, 'Falta la función en el paso "Calcular".'),
-          column: requireField(p.column, 'Falta la columna en el paso "Calcular".'),
-          as: requireField(p.as, 'Falta el nombre del resultado en el paso "Calcular".'),
+          func: requireField(p.func, 'aggregate_function_required', 'Missing function in the "Aggregate" step.'),
+          column: requireField(p.column, 'aggregate_column_required', 'Missing column in the "Aggregate" step.'),
+          as: requireField(p.as, 'aggregate_result_name_required', 'Missing result name in the "Aggregate" step.'),
           distinct: Boolean(p.distinct),
         });
         break;
       case 'compute':
         recipe.computes.push({
-          left: requireOperand(p.left, 'Falta la columna A en el paso "Crear columna".'),
-          right: requireOperand(p.right, 'Falta la columna B (o número) en el paso "Crear columna".'),
-          as: requireField(p.as, 'Falta el nombre del resultado en el paso "Crear columna".'),
+          left: requireOperand(p.left, 'compute_left_required', 'Missing column A in the "Compute" step.'),
+          right: requireOperand(p.right, 'compute_right_required', 'Missing column B (or number) in the "Compute" step.'),
+          as: requireField(p.as, 'compute_result_name_required', 'Missing result name in the "Compute" step.'),
         });
         break;
       case 'filter':
         recipe.filters.push({
-          column: requireField(p.column, 'Falta la columna en el paso "Filtrar filas".'),
-          operator: requireField(p.operator, 'Falta el operador en el paso "Filtrar filas".'),
+          column: requireField(p.column, 'filter_column_required', 'Missing column in the "Filter rows" step.'),
+          operator: requireField(p.operator, 'filter_operator_required', 'Missing operator in the "Filter rows" step.'),
           value: p.value as string | number,
         });
         break;
       case 'percentage':
         recipe.percentage = {
-          of: requireField(p.of, 'Falta elegir el agregado de referencia en el paso "Convertir a porcentaje".'),
-          as: requireField(p.as, 'Falta el nombre del resultado en el paso "Convertir a porcentaje".'),
+          of: requireField(p.of, 'percentage_reference_required', 'Missing reference aggregate in the "Convert to percentage" step.'),
+          as: requireField(p.as, 'percentage_result_name_required', 'Missing result name in the "Convert to percentage" step.'),
         };
         break;
       case 'sort':
         recipe.sort.push({
-          column: requireField(p.column, 'Falta la columna en el paso "Ordenar".'),
-          dir: requireField(p.dir, 'Falta la dirección en el paso "Ordenar".'),
+          column: requireField(p.column, 'sort_column_required', 'Missing column in the "Sort" step.'),
+          dir: requireField(p.dir, 'sort_direction_required', 'Missing direction in the "Sort" step.'),
         });
         break;
       case 'limit': {
         if (p.n === undefined || p.n === null || String(p.n).trim() === '') {
-          throw new BadRequestException('Falta el número de filas en el paso "Limitar filas".');
+          throw new BadRequestException({
+            code: 'limit_rows_required',
+            message: 'Missing row count in the "Limit rows" step.',
+          });
         }
         const n = Number(p.n);
         if (!Number.isFinite(n) || n <= 0) {
-          throw new BadRequestException('El número de filas en "Limitar filas" debe ser mayor a 0.');
+          throw new BadRequestException({
+            code: 'limit_rows_invalid',
+            message: 'The row count in "Limit rows" must be greater than 0.',
+          });
         }
         recipe.limit = n;
         break;
@@ -197,7 +209,10 @@ export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { s
   let fromClause = 'data';
   for (const j of recipe.joins) {
     if (!ALLOWED_JOIN_TYPES.has(j.type)) {
-      throw new BadRequestException(`Tipo de join no permitido: ${j.type}`);
+      throw new BadRequestException({
+        code: 'join_type_not_allowed',
+        message: `Join type not allowed: ${j.type}`,
+      });
     }
     const alias = quoteIdent(j.alias);
     fromClause += ` ${j.type.toUpperCase()} JOIN ${alias} ON data.${quoteIdent(j.onLeft)} = ${alias}.${quoteIdent(j.onRight)}`;
@@ -216,7 +231,10 @@ export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { s
   const where: string[] = [];
   for (const f of recipe.filters) {
     if (!ALLOWED_OPERATORS.has(f.operator)) {
-      throw new BadRequestException(`Operador no permitido: ${f.operator}`);
+      throw new BadRequestException({
+        code: 'operator_not_allowed',
+        message: `Operator not allowed: ${f.operator}`,
+      });
     }
     params.push(f.value);
     where.push(`${quoteIdent(f.column)} ${f.operator} $${params.length}`);
@@ -226,12 +244,18 @@ export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { s
   const aggAliases: string[] = [];
   for (const a of recipe.aggregates) {
     if (!ALLOWED_AGG_FUNCS.has(a.func)) {
-      throw new BadRequestException(`Función no permitida: ${a.func}`);
+      throw new BadRequestException({
+        code: 'aggregate_function_not_allowed',
+        message: `Function not allowed: ${a.func}`,
+      });
     }
     let inner = a.column === '*' ? '*' : quoteIdent(a.column);
     if (a.distinct) {
       if (a.column === '*') {
-        throw new BadRequestException('count_distinct requiere una columna específica.');
+        throw new BadRequestException({
+          code: 'count_distinct_requires_column',
+          message: 'count_distinct requires a specific column.',
+        });
       }
       inner = `DISTINCT ${quoteIdent(a.column)}`;
     }
@@ -243,7 +267,10 @@ export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { s
     const { of: ofAlias, as } = recipe.percentage;
     const aggFor = recipe.aggregates.find((a) => a.as === ofAlias);
     if (!aggFor) {
-      throw new BadRequestException(`percentage.of debe referir un agregado: ${ofAlias}`);
+      throw new BadRequestException({
+        code: 'percentage_reference_not_found',
+        message: `percentage.of must reference an aggregate: ${ofAlias}`,
+      });
     }
     let inner = aggFor.column === '*' ? '*' : quoteIdent(aggFor.column);
     if (aggFor.distinct) inner = `DISTINCT ${inner}`;
@@ -262,7 +289,10 @@ export function buildRecipeSql(recipe: Recipe, previewLimit: number | null): { s
   if (recipe.sort.length > 0) {
     const orderParts = recipe.sort.map((s) => {
       if (!ALLOWED_SORT_DIRS.has(s.dir)) {
-        throw new BadRequestException(`Dirección de sort no permitida: ${s.dir}`);
+        throw new BadRequestException({
+          code: 'sort_direction_not_allowed',
+          message: `Sort direction not allowed: ${s.dir}`,
+        });
       }
       return `${quoteIdent(s.column)} ${s.dir.toUpperCase()}`;
     });

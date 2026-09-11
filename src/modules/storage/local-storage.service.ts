@@ -33,7 +33,7 @@ export class LocalStorageService {
     try {
       await rm(this.resolvePath(storageKey), { force: true });
     } catch (err) {
-      this.logger.warn(`No se pudo borrar "${storageKey}": ${(err as Error).message}`);
+      this.logger.warn(`Could not delete "${storageKey}": ${(err as Error).message}`);
     }
   }
 
@@ -41,7 +41,7 @@ export class LocalStorageService {
     try {
       await rm(this.resolvePath(relativeDir), { recursive: true, force: true });
     } catch (err) {
-      this.logger.warn(`No se pudo borrar la carpeta "${relativeDir}": ${(err as Error).message}`);
+      this.logger.warn(`Could not delete folder "${relativeDir}": ${(err as Error).message}`);
     }
   }
 }

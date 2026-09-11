@@ -135,7 +135,7 @@ describe('AnalysesService: orquestación de join/merge entre recursos', () => {
     } as any;
 
     await expect(service.preview('ds-1', dto)).rejects.toThrow(BadRequestException);
-    await expect(service.preview('ds-1', dto)).rejects.toThrow(/Alias de join/);
+    await expect(service.preview('ds-1', dto)).rejects.toThrow(/Duplicate or reserved join alias/);
   });
 
   it('valida que las columnas del join existan en alguno de los schemas conocidos (base o cruzado)', async () => {
@@ -225,7 +225,7 @@ describe('AnalysesService: editar un análisis guardado', () => {
     const service = new AnalysesService(prisma as any, storage as any, analysisService as any);
 
     await expect(service.update('ds-1', 'an-1', baseDto({ slug: 'dos' }) as any)).rejects.toThrow(
-      /Ya existe un análisis con ese slug/,
+      /already exists/,
     );
   });
 

@@ -23,13 +23,16 @@ export class OrgRolesGuard implements CanActivate {
     const organizationId = request.params?.organizationId;
 
     if (!user) {
-      throw new ForbiddenException('No autenticado.');
+      throw new ForbiddenException({ code: 'not_authenticated', message: 'Not authenticated.' });
     }
     if (user.isSysadmin) {
       return true;
     }
     if (!organizationId) {
-      throw new ForbiddenException('Ruta sin :organizationId; no se puede validar el rol.');
+      throw new ForbiddenException({
+        code: 'organization_id_missing',
+        message: 'Route without :organizationId; the role cannot be validated.',
+      });
     }
 
     const membership = await this.prisma.organizationMember.findUnique({
@@ -37,7 +40,10 @@ export class OrgRolesGuard implements CanActivate {
     });
 
     if (!membership || !requiredRoles.includes(membership.role)) {
-      throw new ForbiddenException('No tienes el rol necesario en esta organización.');
+      throw new ForbiddenException({
+        code: 'insufficient_role',
+        message: 'You do not have the required role in this organization.',
+      });
     }
     return true;
   }

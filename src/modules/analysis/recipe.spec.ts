@@ -5,7 +5,7 @@ describe('recipe: validación de campos obligatorios por paso', () => {
   it('paso "sort" sin columna: mensaje claro, no llega a generar SQL', () => {
     const steps: Step[] = [{ op: 'sort', params: { column: '', dir: 'desc' } }];
     expect(() => stepsToInternal(steps)).toThrow(BadRequestException);
-    expect(() => stepsToInternal(steps)).toThrow(/paso "Ordenar"/);
+    expect(() => stepsToInternal(steps)).toThrow(/"Sort" step/);
   });
 
   it('paso "join" con algún campo vacío: mensaje claro por campo faltante', () => {
@@ -14,16 +14,16 @@ describe('recipe: validación de campos obligatorios por paso', () => {
     ).toThrow(/alias/);
     expect(() =>
       stepsToInternal([{ op: 'join', params: { resourceId: '', alias: 'x', type: 'inner', onLeft: 'a', onRight: 'b' } }]),
-    ).toThrow(/Cruzar con otro recurso/);
+    ).toThrow(/"Join" step/);
   });
 
   it('paso "group_by" sin columnas seleccionadas', () => {
-    expect(() => stepsToInternal([{ op: 'group_by', params: { columns: [] } }])).toThrow(/al menos una columna/);
+    expect(() => stepsToInternal([{ op: 'group_by', params: { columns: [] } }])).toThrow(/at least one selected column/);
   });
 
   it('paso "limit" vacío o en cero', () => {
-    expect(() => stepsToInternal([{ op: 'limit', params: { n: '' } }])).toThrow(/Limitar filas/);
-    expect(() => stepsToInternal([{ op: 'limit', params: { n: 0 } }])).toThrow(/mayor a 0/);
+    expect(() => stepsToInternal([{ op: 'limit', params: { n: '' } }])).toThrow(/"Limit rows"/);
+    expect(() => stepsToInternal([{ op: 'limit', params: { n: 0 } }])).toThrow(/greater than 0/);
   });
 
   it('paso "filter" sí permite un valor vacío a propósito (columna = cadena vacía)', () => {
@@ -89,7 +89,7 @@ describe('recipe: join / merge entre recursos', () => {
       ]);
 
       expect(() => buildRecipeSql(recipe, null)).toThrow(BadRequestException);
-      expect(() => buildRecipeSql(recipe, null)).toThrow(/Tipo de join no permitido/);
+      expect(() => buildRecipeSql(recipe, null)).toThrow(/Join type not allowed/);
     });
 
     it('encadena varios joins, todos contra data (no join sobre join)', () => {

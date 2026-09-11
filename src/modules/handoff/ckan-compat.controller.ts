@@ -9,12 +9,12 @@ export class CkanCompatController {
   @HttpCode(HttpStatus.OK)
   consumeHandoff(@Body('token') token?: string) {
     if (!token || token.length > 128) {
-      return { success: false, error: { message: 'Token inválido' } };
+      return { success: false, error: { message: 'Invalid token' } };
     }
 
     const payload = this.handoffService.consume(token);
     if (!payload) {
-      return { success: false, error: { message: 'Token de handoff inválido o expirado' } };
+      return { success: false, error: { message: 'Invalid or expired handoff token' } };
     }
 
     return {

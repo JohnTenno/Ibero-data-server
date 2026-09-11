@@ -14,7 +14,10 @@ export class DownloadTokenGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const header: string | undefined = request.headers['authorization'];
     if (!header) {
-      throw new UnauthorizedException('Falta el token de descarga.');
+      throw new UnauthorizedException({
+        code: 'download_token_required',
+        message: 'Missing download token.',
+      });
     }
     const token = header.replace(/^Bearer\s+/i, '').trim();
 
@@ -22,12 +25,18 @@ export class DownloadTokenGuard implements CanActivate {
     try {
       payload = await this.jwtService.verifyAsync<JwtPayload>(token);
     } catch {
-      throw new UnauthorizedException('Token de descarga inválido o expirado.');
+      throw new UnauthorizedException({
+        code: 'download_token_invalid',
+        message: 'Invalid or expired download token.',
+      });
     }
 
     const user = await this.authService.validateUser(payload);
     if (!user) {
-      throw new UnauthorizedException('Token de descarga inválido o expirado.');
+      throw new UnauthorizedException({
+        code: 'download_token_invalid',
+        message: 'Invalid or expired download token.',
+      });
     }
     request.user = user;
     return true;

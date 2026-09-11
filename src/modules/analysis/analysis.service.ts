@@ -29,12 +29,12 @@ function stripTrailingSemicolon(sql: string): string {
   return trimmed.endsWith(';') ? trimmed.slice(0, -1) : trimmed;
 }
 
-function safeDuckDbError(err: unknown, paths: string[]): BadRequestException {
-  let message = err instanceof Error ? err.message : 'Error desconocido de DuckDB.';
+function safeDuckDbError(err: unknown, paths: string[], code = 'query_execution_failed'): BadRequestException {
+  let message = err instanceof Error ? err.message : 'Unknown DuckDB error.';
   for (const path of paths) {
-    message = message.split(path).join('<archivo>');
+    message = message.split(path).join('<file>');
   }
-  return new BadRequestException(message);
+  return new BadRequestException({ code, message });
 }
 
 @Injectable()
@@ -89,7 +89,7 @@ export class AnalysisService {
         }));
       });
     } catch (err) {
-      throw safeDuckDbError(err, [parquetPath]);
+      throw safeDuckDbError(err, [parquetPath], 'schema_read_failed');
     }
   }
 
@@ -122,6 +122,7 @@ export class AnalysisService {
       throw safeDuckDbError(
         err,
         sources.map((s) => s.path),
+        'recipe_execution_failed',
       );
     }
   }
@@ -153,6 +154,7 @@ export class AnalysisService {
       throw safeDuckDbError(
         err,
         sources.map((s) => s.path),
+        'recipe_execution_failed',
       );
     }
   }

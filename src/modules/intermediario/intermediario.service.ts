@@ -41,15 +41,17 @@ export class IntermediarioService {
     try {
       res = await fetch(url);
     } catch {
-      throw new BadGatewayException(
-        'No se pudo contactar al intermediario (sectei-intermediario). ¿Está corriendo?',
-      );
+      throw new BadGatewayException({
+        code: 'intermediario_unreachable',
+        message: 'Could not reach the intermediario (sectei-intermediario). Is it running?',
+      });
     }
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new BadGatewayException(
-        `El intermediario respondió ${res.status}${body ? `: ${body.slice(0, 200)}` : '.'}`,
-      );
+      throw new BadGatewayException({
+        code: 'intermediario_error_response',
+        message: `The intermediario responded ${res.status}${body ? `: ${body.slice(0, 200)}` : '.'}`,
+      });
     }
     return res;
   }

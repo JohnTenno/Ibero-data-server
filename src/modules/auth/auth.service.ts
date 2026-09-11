@@ -18,7 +18,10 @@ export class AuthService {
   async register(dto: RegisterDto) {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (existing) {
-      throw new ConflictException('Ya existe un usuario con ese email.');
+      throw new ConflictException({
+        code: 'email_already_registered',
+        message: 'A user with that email already exists.',
+      });
     }
 
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
@@ -31,14 +34,16 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
-    console.log('user', user);
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Credenciales inválidas.');
+      throw new UnauthorizedException({
+        code: 'user_not_found',
+        message: 'User not found or inactive.',
+      });
     }
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) {
-      throw new UnauthorizedException('Credenciales inválidas.');
+      throw new UnauthorizedException({ code: 'wrong_password', message: 'Incorrect password.' });
     }
 
     return this.buildToken(user.id, user.email, user.isSysadmin);
