@@ -29,7 +29,11 @@ function stripTrailingSemicolon(sql: string): string {
   return trimmed.endsWith(';') ? trimmed.slice(0, -1) : trimmed;
 }
 
-function safeDuckDbError(err: unknown, paths: string[], code = 'query_execution_failed'): BadRequestException {
+function safeDuckDbError(
+  err: unknown,
+  paths: string[],
+  code = 'query_execution_failed',
+): BadRequestException {
   let message = err instanceof Error ? err.message : 'Unknown DuckDB error.';
   for (const path of paths) {
     message = message.split(path).join('<file>');
@@ -57,7 +61,10 @@ export class AnalysisService {
     }
   }
 
-  private withDataView<T>(parquetPath: string, fn: (connection: DuckDBConnection) => Promise<T>): Promise<T> {
+  private withDataView<T>(
+    parquetPath: string,
+    fn: (connection: DuckDBConnection) => Promise<T>,
+  ): Promise<T> {
     return this.withViews([{ alias: 'data', path: parquetPath }], fn);
   }
 
@@ -82,7 +89,9 @@ export class AnalysisService {
   async describeSchema(parquetPath: string): Promise<ColumnInfo[]> {
     try {
       return await this.withDataView(parquetPath, async (connection) => {
-        const reader = await connection.runAndReadAll('DESCRIBE SELECT * FROM data');
+        const reader = await connection.runAndReadAll(
+          'DESCRIBE SELECT * FROM data',
+        );
         return reader.getRowObjectsJson().map((row: any) => ({
           name: String(row.column_name),
           type: String(row.column_type),
@@ -107,7 +116,9 @@ export class AnalysisService {
         params.forEach((value, i) => {
           const idx = i + 1;
           if (typeof value === 'number') {
-            Number.isInteger(value) ? prepared.bindInteger(idx, value) : prepared.bindDouble(idx, value);
+            Number.isInteger(value)
+              ? prepared.bindInteger(idx, value)
+              : prepared.bindDouble(idx, value);
           } else {
             prepared.bindVarchar(idx, String(value));
           }
@@ -127,6 +138,52 @@ export class AnalysisService {
     }
   }
 
+  /**
+   * Vuelca filas en memoria a un Parquet todo-VARCHAR (lo usa el armonizador:
+   * su pipeline es todo-string y no infiere tipos). Las celdas ausentes salen
+   * como "" y no como NULL, igual que el `fillna("")` del original.
+   */
+  async writeRowsToParquet(
+    columns: string[],
+    rows: Record<string, unknown>[],
+    destPath: string,
+  ): Promise<void> {
+    if (columns.length === 0) {
+      throw new BadRequestException({
+        code: 'parquet_columns_required',
+        message: 'Cannot write a Parquet file without columns.',
+      });
+    }
+    const instance = await DuckDBInstance.create(':memory:');
+    const connection = await instance.connect();
+    try {
+      const columnDefs = columns
+        .map((c) => `${quoteIdent(c)} VARCHAR`)
+        .join(', ');
+      await connection.run(`CREATE TABLE _ibero_rows (${columnDefs})`);
+
+      const appender = await connection.createAppender('_ibero_rows');
+      for (const row of rows) {
+        for (const column of columns) {
+          const value = row[column];
+          appender.appendVarchar(
+            value === undefined || value === null ? '' : String(value),
+          );
+        }
+        appender.endRow();
+      }
+      appender.closeSync();
+
+      await connection.run(
+        `COPY _ibero_rows TO '${escapeSqlLiteral(destPath)}' (FORMAT PARQUET)`,
+      );
+    } catch (err) {
+      throw safeDuckDbError(err, [destPath], 'parquet_write_failed');
+    } finally {
+      connection.closeSync();
+    }
+  }
+
   async writeRecipeResult(
     parquetPath: string,
     recipe: Recipe,
@@ -143,7 +200,9 @@ export class AnalysisService {
         params.forEach((value, i) => {
           const idx = i + 1;
           if (typeof value === 'number') {
-            Number.isInteger(value) ? prepared.bindInteger(idx, value) : prepared.bindDouble(idx, value);
+            Number.isInteger(value)
+              ? prepared.bindInteger(idx, value)
+              : prepared.bindDouble(idx, value);
           } else {
             prepared.bindVarchar(idx, String(value));
           }

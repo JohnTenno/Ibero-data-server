@@ -11,6 +11,7 @@ import { DatasetsModule } from './modules/datasets/datasets.module.js';
 import { AnalysesModule } from './modules/analyses/analyses.module.js';
 import { IntermediarioModule } from './modules/intermediario/intermediario.module.js';
 import { PublicModule } from './modules/public/public.module.js';
+import { HarmonizerModule } from './modules/harmonizer/harmonizer.module.js';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { PublicModule } from './modules/public/public.module.js';
     AnalysesModule,
     IntermediarioModule,
     PublicModule,
+    HarmonizerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

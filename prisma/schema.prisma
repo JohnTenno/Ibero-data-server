@@ -112,14 +112,14 @@ model Dataset {
   licenseId String?
 
   // ---- Versionado ----
-  revision       Int      @default(1)
+  revision       Int       @default(1)
   revisionOfId   String?
   revisionOf     Dataset?  @relation("DatasetRevisions", fields: [revisionOfId], references: [id])
   revisions      Dataset[] @relation("DatasetRevisions")
   changelog      String?
-  supersededById String?  @unique
-  supersededBy   Dataset? @relation("DatasetSupersession", fields: [supersededById], references: [id])
-  supersedes     Dataset? @relation("DatasetSupersession")
+  supersededById String?   @unique
+  supersededBy   Dataset?  @relation("DatasetSupersession", fields: [supersededById], references: [id])
+  supersedes     Dataset?  @relation("DatasetSupersession")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -156,29 +156,118 @@ model Resource {
 /// de ckanext-duckdb, pero como entidad propia en vez de un Dataset completo
 /// (no necesitábamos todo el aparato de organización/miembros para esto).
 model Analysis {
-  id               String         @id @default(uuid())
+  id               String            @id @default(uuid())
   datasetId        String
   sourceResourceId String
   title            String
-  slug             String         @unique
+  slug             String            @unique
   folder           String
   description      String?
   visibility       DatasetVisibility @default(PRIVATE)
   /// Los steps tal como los mandó el step-builder: [{ op, params }, ...]
   recipe           Json
-  status           AnalysisStatus @default(PENDING)
+  status           AnalysisStatus    @default(PENDING)
   errorMessage     String?
   resultStorageKey String?
   resultRowCount   Int?
   /// [{ name, type }] del resultado, para poder mostrar la tabla sin releer el parquet.
   resultColumns    Json?
   createdById      String
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   dataset        Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
   sourceResource Resource @relation(fields: [sourceResourceId], references: [id])
   createdBy      User     @relation(fields: [createdById], references: [id])
 
   @@map("analyses")
+}
+
+// ---------------------------------------------------------------------------
+// Armonizador de encuestas (portado de sectei-intermediario / FastAPI).
+// Unifica columnas con nombres distintos entre ediciones (`age` 2020, `edad1`
+// 2021) bajo un nombre canónico por encuesta. La vista armonizada NUNCA se
+// materializa: se calcula al vuelo desde raw_rows + mappings.
+// Prefijo `Harmonizer` porque `Survey` (enum) y `Dataset` ya existen arriba.
+// ---------------------------------------------------------------------------
+
+model HarmonizerSurvey {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  datasets           HarmonizerDataset[]
+  canonicalVariables HarmonizerCanonicalVariable[]
+
+  @@map("harmonizer_surveys")
+}
+
+/// Una edición concreta de la encuesta (el CSV subido para un año).
+model HarmonizerDataset {
+  id        String   @id @default(uuid())
+  surveyId  String
+  name      String
+  year      Int
+  /// Encabezados del CSV en su orden original. jsonb no conserva el orden de
+  /// claves, así que el orden de columnas de la vista armonizada sale de aquí.
+  columns   String[] @default([])
+  rowCount  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  survey   HarmonizerSurvey    @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  rawRows  HarmonizerRawRow[]
+  mappings HarmonizerMapping[]
+
+  @@index([surveyId])
+  @@map("harmonizer_datasets")
+}
+
+/// Fila cruda del CSV, todo-string (las celdas vacías son "" y no null).
+/// Guarda TODAS las columnas, incluidas las que nunca se mapean.
+model HarmonizerRawRow {
+  id        String @id @default(uuid())
+  datasetId String
+  rowIndex  Int
+  data      Json
+
+  dataset HarmonizerDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId, rowIndex])
+  @@map("harmonizer_raw_rows")
+}
+
+/// Nombre canónico, único POR encuesta (no global): `edad` puede existir en
+/// dos encuestas distintas como dos filas.
+model HarmonizerCanonicalVariable {
+  id          String  @id @default(uuid())
+  surveyId    String
+  name        String
+  description String?
+  dataType    String  @default("text")
+
+  survey   HarmonizerSurvey    @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  mappings HarmonizerMapping[]
+
+  @@unique([surveyId, name])
+  @@index([surveyId])
+  @@map("harmonizer_canonical_variables")
+}
+
+/// "La columna `edad1` de este dataset corresponde a la canónica `edad`".
+/// Clave (datasetId, sourceColumn): una columna se mapea a UNA canónica por
+/// dataset, y cada dataset puede mapear la misma columna a canónicas distintas.
+model HarmonizerMapping {
+  id                  String @id @default(uuid())
+  datasetId           String
+  sourceColumn        String
+  canonicalVariableId String
+
+  dataset           HarmonizerDataset           @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  canonicalVariable HarmonizerCanonicalVariable @relation(fields: [canonicalVariableId], references: [id], onDelete: Cascade)
+
+  @@unique([datasetId, sourceColumn])
+  @@index([datasetId])
+  @@index([canonicalVariableId])
+  @@map("harmonizer_mappings")
 }

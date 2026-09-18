@@ -1,0 +1,616 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
+import { parse } from 'csv-parse/sync';
+import { stringify } from 'csv-stringify/sync';
+import { randomUUID } from 'node:crypto';
+import { readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { AnalysisService } from '../analysis/analysis.service.js';
+import { asciiFold, matchByName, parseVariables } from './matching.js';
+import {
+  buildDatasetView,
+  buildSurveyView,
+  type DatasetEdition,
+  type HarmonizedView,
+  type RawData,
+} from './harmonized-view.js';
+import { NEW_SURVEY, type UploadDatasetDto } from './dto/upload-dataset.dto.js';
+import {
+  CANONICAL_PREFIX,
+  NEW_CANONICAL,
+  type MappingChoiceDto,
+} from './dto/mapping-choice.dto.js';
+import type { CreateSurveyDto } from './dto/create-survey.dto.js';
+import type { SaveMappingDto } from './dto/save-mapping.dto.js';
+
+export interface SurveyDatasetSummary {
+  id: string;
+  name: string;
+  year: number;
+  rowCount: number;
+  mappedColumns: number;
+  totalColumns: number;
+}
+
+export interface SurveySummary {
+  id: string;
+  name: string;
+  description: string | null;
+  datasets: SurveyDatasetSummary[];
+}
+
+export interface DatasetInfo {
+  id: string;
+  name: string;
+  year: number;
+  surveyId: string;
+  surveyName: string;
+}
+
+export type SuggestionSource = 'history' | 'name';
+
+export interface MappingColumn {
+  name: string;
+  selectedCanonicalId: string | null;
+  suggested: string | null;
+  suggestionSource: SuggestionSource | null;
+}
+
+export type ExportFormat = 'csv' | 'parquet';
+
+export interface ExportFile {
+  filename: string;
+  contentType: string;
+  body: Buffer;
+}
+
+const RAW_ROW_BATCH = 1_000;
+const EXPORT_CONTENT_TYPE: Record<ExportFormat, string> = {
+  csv: 'text/csv; charset=utf-8',
+  parquet: 'application/vnd.apache.parquet',
+};
+
+function isExportFormat(fmt: string): fmt is ExportFormat {
+  return fmt === 'csv' || fmt === 'parquet';
+}
+
+function dedupeHeaders(headers: string[]): string[] {
+  const seen = new Map<string, number>();
+  return headers.map((h) => {
+    const count = seen.get(h) ?? 0;
+    seen.set(h, count + 1);
+    return count === 0 ? h : `${h}.${count}`;
+  });
+}
+
+@Injectable()
+export class HarmonizerService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly analysisService: AnalysisService,
+  ) {}
+
+  async listSurveys(): Promise<SurveySummary[]> {
+    const surveys = await this.prisma.harmonizerSurvey.findMany({
+      orderBy: { name: 'asc' },
+      include: {
+        datasets: {
+          orderBy: [{ year: 'asc' }, { createdAt: 'asc' }],
+          include: { _count: { select: { mappings: true } } },
+        },
+      },
+    });
+    return surveys.map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      datasets: s.datasets.map((d) => ({
+        id: d.id,
+        name: d.name,
+        year: d.year,
+        rowCount: d.rowCount,
+        mappedColumns: d._count.mappings,
+        totalColumns: d.columns.length,
+      })),
+    }));
+  }
+
+  async createSurvey(dto: CreateSurveyDto) {
+    const name = dto.name.trim();
+    if (!name) {
+      throw new BadRequestException({
+        code: 'survey_name_required',
+        message: 'Survey name cannot be empty.',
+      });
+    }
+    const existing = await this.prisma.harmonizerSurvey.findUnique({
+      where: { name },
+    });
+    if (existing) {
+      return this.toSurveyDto(existing);
+    }
+    const created = await this.prisma.harmonizerSurvey.create({
+      data: { name, description: dto.description?.trim() || null },
+    });
+    return this.toSurveyDto(created);
+  }
+
+  async getSurvey(surveyId: string) {
+    const survey = await this.prisma.harmonizerSurvey.findUnique({
+      where: { id: surveyId },
+    });
+    if (!survey) {
+      throw new NotFoundException({
+        code: 'survey_not_found',
+        message: 'Survey not found.',
+      });
+    }
+    return survey;
+  }
+
+  private toSurveyDto(survey: {
+    id: string;
+    name: string;
+    description: string | null;
+  }) {
+    return {
+      id: survey.id,
+      name: survey.name,
+      description: survey.description,
+    };
+  }
+
+  async uploadDataset(
+    dto: UploadDatasetDto,
+    file: { originalname: string; buffer: Buffer },
+  ): Promise<{ datasetId: string; dataset: DatasetInfo }> {
+    const survey = await this.resolveSurveyForUpload(dto);
+    const { columns, rows } = this.parseCsv(file.buffer);
+
+    const dataset = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.harmonizerDataset.create({
+        data: {
+          surveyId: survey.id,
+          name: dto.name.trim(),
+          year: dto.year,
+          columns,
+          rowCount: rows.length,
+        },
+      });
+      for (let offset = 0; offset < rows.length; offset += RAW_ROW_BATCH) {
+        const batch = rows
+          .slice(offset, offset + RAW_ROW_BATCH)
+          .map((data, i) => ({
+            datasetId: created.id,
+            rowIndex: offset + i,
+            data: data as Prisma.InputJsonObject,
+          }));
+        await tx.harmonizerRawRow.createMany({ data: batch });
+      }
+      return created;
+    });
+
+    return {
+      datasetId: dataset.id,
+      dataset: {
+        id: dataset.id,
+        name: dataset.name,
+        year: dataset.year,
+        surveyId: survey.id,
+        surveyName: survey.name,
+      },
+    };
+  }
+
+  private async resolveSurveyForUpload(dto: UploadDatasetDto) {
+    if (dto.surveyId !== NEW_SURVEY) {
+      return this.getSurvey(dto.surveyId);
+    }
+    const name = dto.newSurvey?.trim() ?? '';
+    if (!name) {
+      throw new BadRequestException({
+        code: 'new_survey_name_required',
+        message: 'Provide the name of the new survey in "newSurvey".',
+      });
+    }
+    return this.createSurvey({ name });
+  }
+
+  private parseCsv(buffer: Buffer): { columns: string[]; rows: RawData[] } {
+    let columns: string[] = [];
+    let rows: RawData[];
+    try {
+      rows = parse(buffer, {
+        bom: true,
+        columns: (header: string[]) => {
+          columns = dedupeHeaders(header);
+          return columns;
+        },
+        skip_empty_lines: true,
+        trim: false,
+        cast: false,
+      }) as RawData[];
+    } catch (err) {
+      throw new BadRequestException({
+        code: 'csv_invalid',
+        message: `Invalid CSV: ${err instanceof Error ? err.message : 'could not parse the file.'}`,
+      });
+    }
+    return { columns, rows };
+  }
+
+  async getDataset(datasetId: string) {
+    const dataset = await this.prisma.harmonizerDataset.findUnique({
+      where: { id: datasetId },
+      include: { survey: true },
+    });
+    if (!dataset) {
+      throw new NotFoundException({
+        code: 'harmonizer_dataset_not_found',
+        message: 'Dataset not found.',
+      });
+    }
+    return dataset;
+  }
+
+  private toDatasetInfo(dataset: {
+    id: string;
+    name: string;
+    year: number;
+    surveyId: string;
+    survey: { name: string };
+  }): DatasetInfo {
+    return {
+      id: dataset.id,
+      name: dataset.name,
+      year: dataset.year,
+      surveyId: dataset.surveyId,
+      surveyName: dataset.survey.name,
+    };
+  }
+
+  async getMapping(datasetId: string): Promise<{
+    dataset: DatasetInfo;
+    columns: MappingColumn[];
+    canonicalVariables: { id: string; name: string }[];
+  }> {
+    const dataset = await this.getDataset(datasetId);
+
+    const [canonicals, saved, historical] = await Promise.all([
+      this.prisma.harmonizerCanonicalVariable.findMany({
+        where: { surveyId: dataset.surveyId },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      }),
+      this.prisma.harmonizerMapping.findMany({ where: { datasetId } }),
+      this.prisma.harmonizerMapping.findMany({
+        where: {
+          datasetId: { not: datasetId },
+          sourceColumn: { in: dataset.columns },
+          dataset: { surveyId: dataset.surveyId },
+        },
+      }),
+    ]);
+
+    const nameById = new Map(canonicals.map((c) => [c.id, c.name]));
+    const savedByColumn = new Map(
+      saved.map((m) => [m.sourceColumn, m.canonicalVariableId]),
+    );
+    const historicalByColumn = new Map<string, string>();
+    for (const m of historical) {
+      if (!historicalByColumn.has(m.sourceColumn))
+        historicalByColumn.set(m.sourceColumn, m.canonicalVariableId);
+    }
+
+    const columns = dataset.columns.map((name): MappingColumn => {
+      const savedId = savedByColumn.get(name);
+      if (savedId) {
+        return {
+          name,
+          selectedCanonicalId: savedId,
+          suggested: null,
+          suggestionSource: null,
+        };
+      }
+      const historicalId = historicalByColumn.get(name);
+      if (historicalId) {
+        return {
+          name,
+          selectedCanonicalId: historicalId,
+          suggested: nameById.get(historicalId) ?? null,
+          suggestionSource: 'history',
+        };
+      }
+      const matchedId = matchByName(name, canonicals);
+      if (matchedId) {
+        return {
+          name,
+          selectedCanonicalId: matchedId,
+          suggested: nameById.get(matchedId) ?? null,
+          suggestionSource: 'name',
+        };
+      }
+      return {
+        name,
+        selectedCanonicalId: null,
+        suggested: null,
+        suggestionSource: null,
+      };
+    });
+
+    return {
+      dataset: this.toDatasetInfo(dataset),
+      columns,
+      canonicalVariables: canonicals,
+    };
+  }
+
+  async saveMapping(
+    datasetId: string,
+    dto: SaveMappingDto,
+  ): Promise<{ ok: true; datasetId: string }> {
+    const dataset = await this.getDataset(datasetId);
+    const choiceByColumn = new Map(dto.columns.map((c) => [c.column, c]));
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const column of dataset.columns) {
+        const choice = choiceByColumn.get(column);
+        const canonicalId = await this.resolveCanonicalChoice(
+          tx,
+          dataset.surveyId,
+          choice,
+        );
+        const existing = await tx.harmonizerMapping.findUnique({
+          where: {
+            datasetId_sourceColumn: { datasetId, sourceColumn: column },
+          },
+        });
+
+        if (canonicalId === null) {
+          if (existing)
+            await tx.harmonizerMapping.delete({ where: { id: existing.id } });
+        } else if (existing) {
+          if (existing.canonicalVariableId !== canonicalId) {
+            await tx.harmonizerMapping.update({
+              where: { id: existing.id },
+              data: { canonicalVariableId: canonicalId },
+            });
+          }
+        } else {
+          await tx.harmonizerMapping.create({
+            data: {
+              datasetId,
+              sourceColumn: column,
+              canonicalVariableId: canonicalId,
+            },
+          });
+        }
+      }
+    });
+
+    return { ok: true, datasetId };
+  }
+
+  private async resolveCanonicalChoice(
+    tx: Prisma.TransactionClient,
+    surveyId: string,
+    choice: MappingChoiceDto | undefined,
+  ): Promise<string | null> {
+    if (!choice) return null;
+
+    if (choice.choice === NEW_CANONICAL) {
+      const name = choice.newName?.trim() ?? '';
+      if (!name) return null;
+      const existing = await tx.harmonizerCanonicalVariable.findUnique({
+        where: { surveyId_name: { surveyId, name } },
+      });
+      if (existing) return existing.id;
+      const created = await tx.harmonizerCanonicalVariable.create({
+        data: {
+          surveyId,
+          name,
+          dataType: choice.newDataType?.trim() || 'text',
+        },
+      });
+      return created.id;
+    }
+
+    if (choice.choice.startsWith(CANONICAL_PREFIX)) {
+      const id = choice.choice.slice(CANONICAL_PREFIX.length);
+      const canonical = await tx.harmonizerCanonicalVariable.findFirst({
+        where: { id, surveyId },
+      });
+      if (!canonical) {
+        throw new BadRequestException({
+          code: 'canonical_variable_not_found',
+          message: `Canonical variable "${id}" does not belong to this survey.`,
+        });
+      }
+      return canonical.id;
+    }
+
+    return null;
+  }
+
+  private async loadEdition(dataset: {
+    id: string;
+    name: string;
+    year: number;
+    columns: string[];
+  }): Promise<DatasetEdition> {
+    const [mappings, rawRows] = await Promise.all([
+      this.prisma.harmonizerMapping.findMany({
+        where: { datasetId: dataset.id },
+        include: { canonicalVariable: { select: { name: true } } },
+      }),
+      this.prisma.harmonizerRawRow.findMany({
+        where: { datasetId: dataset.id },
+        orderBy: { rowIndex: 'asc' },
+        select: { data: true },
+      }),
+    ]);
+    return {
+      name: dataset.name,
+      year: dataset.year,
+      columns: dataset.columns,
+      columnToCanonical: new Map(
+        mappings.map((m) => [m.sourceColumn, m.canonicalVariable.name]),
+      ),
+      rows: rawRows.map((r) => r.data as RawData),
+    };
+  }
+
+  async getDatasetHarmonized(datasetId: string) {
+    const dataset = await this.getDataset(datasetId);
+    const view = buildDatasetView(await this.loadEdition(dataset));
+    return {
+      dataset: this.toDatasetInfo(dataset),
+      headers: view.headers,
+      rows: view.rows,
+      availableVariables: view.headers,
+      selectedCount: view.headers.length,
+    };
+  }
+
+  private async availableVariables(surveyId: string): Promise<string[]> {
+    const canonicals = await this.prisma.harmonizerCanonicalVariable.findMany({
+      where: { surveyId, mappings: { some: {} } },
+      orderBy: { name: 'asc' },
+      select: { name: true },
+    });
+    return canonicals.map((c) => c.name);
+  }
+
+  private async surveyView(
+    surveyId: string,
+    variables: string | string[] | undefined,
+  ) {
+    const survey = await this.getSurvey(surveyId);
+    const available = await this.availableVariables(surveyId);
+    const selected = parseVariables(variables);
+    const wanted = selected.length > 0 ? selected : available;
+
+    const datasets = await this.prisma.harmonizerDataset.findMany({
+      where: { surveyId },
+      orderBy: [{ year: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    });
+    const editions: DatasetEdition[] = [];
+    for (const dataset of datasets) {
+      editions.push(await this.loadEdition(dataset));
+    }
+
+    return {
+      survey,
+      available,
+      selected,
+      view: buildSurveyView(editions, wanted),
+    };
+  }
+
+  async getSurveyHarmonized(
+    surveyId: string,
+    variables: string | string[] | undefined,
+  ) {
+    const { survey, available, selected, view } = await this.surveyView(
+      surveyId,
+      variables,
+    );
+    return {
+      survey: { id: survey.id, name: survey.name },
+      headers: view.headers,
+      rows: view.rows,
+      availableVariables: available,
+      selected,
+      selectedCount: view.headers.length,
+    };
+  }
+
+  async exportDataset(datasetId: string, fmt: string): Promise<ExportFile> {
+    const format = this.assertExportFormat(fmt);
+    const dataset = await this.getDataset(datasetId);
+    const view = buildDatasetView(await this.loadEdition(dataset));
+    return this.exportView(
+      `harmonized_${dataset.name}_${dataset.year}`,
+      view.headers,
+      view,
+      format,
+    );
+  }
+
+  async exportSurvey(
+    surveyId: string,
+    fmt: string,
+    variables: string | string[] | undefined,
+  ): Promise<ExportFile> {
+    const format = this.assertExportFormat(fmt);
+    const { survey, view } = await this.surveyView(surveyId, variables);
+    return this.exportView(
+      `harmonized_${survey.name}`,
+      ['_dataset', '_year', ...view.headers],
+      view,
+      format,
+    );
+  }
+
+  private assertExportFormat(fmt: string): ExportFormat {
+    const format = fmt.toLowerCase();
+    if (!isExportFormat(format)) {
+      throw new NotFoundException({
+        code: 'export_format_not_supported',
+        message: `Export format not supported: ${fmt}. Use "csv" or "parquet".`,
+      });
+    }
+    return format;
+  }
+
+  private async exportView(
+    baseName: string,
+    columns: string[],
+    view: HarmonizedView,
+    format: ExportFormat,
+  ): Promise<ExportFile> {
+    const safeBase =
+      asciiFold(baseName)
+        .replace(/\s+/g, '_')
+        .replace(/[^A-Za-z0-9_.-]/g, '') || 'harmonized';
+    const filename = `${safeBase}.${format}`;
+    const contentType = EXPORT_CONTENT_TYPE[format];
+
+    if (format === 'csv') {
+      const csv = stringify(view.rows, {
+        header: true,
+        columns,
+        cast: { number: (n) => String(n) },
+      });
+      return {
+        filename,
+        contentType,
+        body: Buffer.from(`\ufeff${csv}`, 'utf8'),
+      };
+    }
+
+    if (columns.length === 0) {
+      throw new BadRequestException({
+        code: 'harmonized_view_empty',
+        message: 'There are no mapped variables to export as Parquet.',
+      });
+    }
+    const tmpPath = join(tmpdir(), `ibero-harmonized-${randomUUID()}.parquet`);
+    try {
+      await this.analysisService.writeRowsToParquet(
+        columns,
+        view.rows,
+        tmpPath,
+      );
+      return { filename, contentType, body: await readFile(tmpPath) };
+    } finally {
+      await rm(tmpPath, { force: true });
+    }
+  }
+}
