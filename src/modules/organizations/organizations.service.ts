@@ -1,9 +1,28 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { OrgRole } from '@prisma/client';
+import { OrgRole, type Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LocalStorageService } from '../storage/local-storage.service.js';
 import type { CreateOrganizationDto } from './dto/create-organization.dto.js';
 import type { AddMemberDto } from './dto/add-member.dto.js';
+
+export type OrganizationSort = 'recent' | 'name-asc' | 'name-desc' | 'datasets-desc' | 'members-desc';
+
+export interface ListOrganizationsParams {
+  q?: string;
+  /** Extra free-text terms, each ANDed with the rest (filter panel selections). */
+  terms?: string[];
+  sort?: OrganizationSort;
+  limit?: number;
+  offset?: number;
+}
+
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 200;
+
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LIMIT;
+  return Math.min(Math.max(Math.trunc(limit), 1), MAX_LIMIT);
+}
 
 @Injectable()
 export class OrganizationsService {
@@ -12,11 +31,55 @@ export class OrganizationsService {
     private readonly storage: LocalStorageService,
   ) {}
 
-  findAll() {
-    return this.prisma.organization.findMany({
-      orderBy: { name: 'asc' },
-      include: { _count: { select: { datasets: true, members: true } } },
-    });
+  private orderBy(sort?: OrganizationSort): Prisma.OrganizationOrderByWithRelationInput {
+    switch (sort) {
+      case 'name-asc':
+        return { name: 'asc' };
+      case 'name-desc':
+        return { name: 'desc' };
+      case 'datasets-desc':
+        return { datasets: { _count: 'desc' } };
+      case 'members-desc':
+        return { members: { _count: 'desc' } };
+      case 'recent':
+      default:
+        return { createdAt: 'desc' };
+    }
+  }
+
+  private termWhere(term: string): Prisma.OrganizationWhereInput {
+    const t = term.trim();
+    return {
+      OR: [
+        { name: { contains: t, mode: 'insensitive' } },
+        { description: { contains: t, mode: 'insensitive' } },
+      ],
+    };
+  }
+
+  async findAll(params: ListOrganizationsParams = {}) {
+    const q = (params.q ?? '').trim();
+    const terms = (params.terms ?? []).map((t) => t.trim()).filter(Boolean);
+    const limit = clampLimit(params.limit);
+    const offset = Math.max(params.offset ?? 0, 0);
+    const and: Prisma.OrganizationWhereInput[] = [
+      ...(q ? [this.termWhere(q)] : []),
+      ...terms.map((t) => this.termWhere(t)),
+    ];
+    const where: Prisma.OrganizationWhereInput = and.length ? { AND: and } : {};
+
+    const [total, items] = await Promise.all([
+      this.prisma.organization.count({ where }),
+      this.prisma.organization.findMany({
+        where,
+        orderBy: this.orderBy(params.sort),
+        take: limit,
+        skip: offset,
+        include: { _count: { select: { datasets: true, members: true } } },
+      }),
+    ]);
+
+    return { total, items };
   }
 
   findRecent(limit: number) {

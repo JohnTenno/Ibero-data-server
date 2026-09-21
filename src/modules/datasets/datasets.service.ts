@@ -1,7 +1,31 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LocalStorageService } from '../storage/local-storage.service.js';
 import type { CreateDatasetDto } from './dto/create-dataset.dto.js';
+
+export type DatasetSort = 'recent' | 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc';
+
+export interface ListDatasetsParams {
+  /** Main free-text search (title, description, tags, sourceOrg, year, organization name). */
+  q?: string;
+  /**
+   * Extra free-text terms, each ANDed with the rest (used by the filter panel: every
+   * selected option becomes one more term that must match somewhere on the dataset).
+   */
+  terms?: string[];
+  sort?: DatasetSort;
+  limit?: number;
+  offset?: number;
+}
+
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 200;
+
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LIMIT;
+  return Math.min(Math.max(Math.trunc(limit), 1), MAX_LIMIT);
+}
 
 @Injectable()
 export class DatasetsService {
@@ -10,19 +34,73 @@ export class DatasetsService {
     private readonly storage: LocalStorageService,
   ) {}
 
-  findAllByOrganization(organizationId: string) {
-    return this.prisma.dataset.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'desc' },
-    });
+  private orderBy(sort?: DatasetSort): Prisma.DatasetOrderByWithRelationInput {
+    switch (sort) {
+      case 'title-asc':
+        return { title: 'asc' };
+      case 'title-desc':
+        return { title: 'desc' };
+      case 'year-desc':
+        return { year: 'desc' };
+      case 'year-asc':
+        return { year: 'asc' };
+      case 'recent':
+      default:
+        return { updatedAt: 'desc' };
+    }
   }
 
-  findAllGlobal(limit?: number) {
-    return this.prisma.dataset.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-      include: { organization: { select: { id: true, name: true, slug: true } } },
-    });
+  private termWhere(term: string): Prisma.DatasetWhereInput {
+    const t = term.trim();
+    const yearNum = Number(t);
+    return {
+      OR: [
+        { title: { contains: t, mode: 'insensitive' } },
+        { description: { contains: t, mode: 'insensitive' } },
+        { sourceOrg: { contains: t, mode: 'insensitive' } },
+        { tags: { has: t } },
+        ...(Number.isFinite(yearNum) ? [{ year: yearNum }] : []),
+        { organization: { name: { contains: t, mode: 'insensitive' as const } } },
+      ],
+    };
+  }
+
+  private buildWhere(organizationId: string | undefined, params: ListDatasetsParams): Prisma.DatasetWhereInput {
+    const q = (params.q ?? '').trim();
+    const terms = (params.terms ?? []).map((t) => t.trim()).filter(Boolean);
+    const and: Prisma.DatasetWhereInput[] = [
+      ...(organizationId ? [{ organizationId }] : []),
+      ...(q ? [this.termWhere(q)] : []),
+      ...terms.map((t) => this.termWhere(t)),
+    ];
+    return and.length ? { AND: and } : {};
+  }
+
+  private async listDatasets(organizationId: string | undefined, params: ListDatasetsParams) {
+    const where = this.buildWhere(organizationId, params);
+    const limit = clampLimit(params.limit);
+    const offset = Math.max(params.offset ?? 0, 0);
+
+    const [total, items] = await Promise.all([
+      this.prisma.dataset.count({ where }),
+      this.prisma.dataset.findMany({
+        where,
+        orderBy: this.orderBy(params.sort),
+        take: limit,
+        skip: offset,
+        include: { organization: { select: { id: true, name: true, slug: true } } },
+      }),
+    ]);
+
+    return { total, items };
+  }
+
+  findAllByOrganization(organizationId: string, params: ListDatasetsParams = {}) {
+    return this.listDatasets(organizationId, params);
+  }
+
+  findAllGlobal(params: ListDatasetsParams = {}) {
+    return this.listDatasets(undefined, params);
   }
 
   async findOne(organizationId: string, datasetId: string) {
@@ -40,7 +118,7 @@ export class DatasetsService {
     }
     return dataset;
   }
-  
+
   async create(organizationId: string, dto: CreateDatasetDto, ownerId: string) {
     const { revisionOfId, changelog, ...rest } = dto;
 
@@ -77,7 +155,7 @@ export class DatasetsService {
 
     return created;
   }
-  
+
   async remove(organizationId: string, datasetId: string): Promise<void> {
     const dataset = await this.findOne(organizationId, datasetId);
 

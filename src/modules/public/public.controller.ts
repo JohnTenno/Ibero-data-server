@@ -8,9 +8,17 @@ export class PublicController {
   constructor(private readonly publicService: PublicService) {}
 
   @Get('catalog')
-  search(@Query('q') q?: string, @Query('limit') limit?: string, @Query('offset') offset?: string) {
+  search(
+    @Query('q') q?: string,
+    @Query('org') org?: string,
+    @Query('sort') sort?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
     return this.publicService.search({
       q,
+      org,
+      sort,
       limit: limit !== undefined ? Number(limit) : undefined,
       offset: offset !== undefined ? Number(offset) : undefined,
     });
@@ -48,8 +56,18 @@ export class PublicController {
   }
 
   @Get('organizations')
-  organizations() {
-    return this.publicService.listOrganizations();
+  organizations(
+    @Query('q') q?: string,
+    @Query('sort') sort?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.publicService.listOrganizations({
+      q,
+      sort,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      offset: offset !== undefined ? Number(offset) : undefined,
+    });
   }
 
   @Get('organizations/count')

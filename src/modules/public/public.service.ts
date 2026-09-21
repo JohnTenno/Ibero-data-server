@@ -84,12 +84,29 @@ export class PublicService {
     };
   }
 
-  async search(params: { q?: string; limit?: number; offset?: number }): Promise<{ total: number; items: PublicPackage[] }> {
+  private catalogOrderBy(sort?: string) {
+    switch (sort) {
+      case 'title-asc':
+        return { title: 'asc' as const };
+      case 'title-desc':
+        return { title: 'desc' as const };
+      case 'recent':
+      default:
+        return { updatedAt: 'desc' as const };
+    }
+  }
+
+  async search(params: { q?: string; org?: string; sort?: string; limit?: number; offset?: number }): Promise<{ total: number; items: PublicPackage[] }> {
     const q = (params.q ?? '').trim();
+    const org = (params.org ?? '').trim();
     const limit = clampInt(params.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
     const offset = clampInt(params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const where = {
-      ...PUBLIC_DONE_ANALYSIS,
+      status: PUBLIC_DONE_ANALYSIS.status,
+      dataset: {
+        visibility: PUBLIC_DONE_ANALYSIS.dataset.visibility,
+        ...(org ? { organization: { slug: org } } : {}),
+      },
       ...(q
         ? { OR: [{ title: { contains: q, mode: 'insensitive' as const } }, { description: { contains: q, mode: 'insensitive' as const } }] }
         : {}),
@@ -100,7 +117,7 @@ export class PublicService {
       this.prisma.analysis.findMany({
         where,
         include: { dataset: { include: { organization: true } } },
-        orderBy: { updatedAt: 'desc' },
+        orderBy: this.catalogOrderBy(params.sort),
         take: limit,
         skip: offset,
       }),
@@ -240,12 +257,30 @@ export class PublicService {
     return { url };
   }
 
-  async listOrganizations(): Promise<{ id: string; name: string; title: string; description: string | null }[]> {
-    const orgs = await this.prisma.organization.findMany({
-      where: { datasets: { some: { visibility: DatasetVisibility.PUBLIC, analyses: { some: { status: 'DONE' } } } } },
-      orderBy: { name: 'asc' },
-    });
-    return orgs.map((o) => ({ id: o.id, name: o.slug, title: o.name, description: o.description }));
+  async listOrganizations(params: { q?: string; sort?: string; limit?: number; offset?: number } = {}): Promise<{
+    total: number;
+    items: { id: string; name: string; title: string; description: string | null }[];
+  }> {
+    const q = (params.q ?? '').trim();
+    const limit = clampInt(params.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
+    const offset = clampInt(params.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const where = {
+      datasets: { some: { visibility: DatasetVisibility.PUBLIC, analyses: { some: { status: 'DONE' as const } } } },
+      ...(q
+        ? { OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { description: { contains: q, mode: 'insensitive' as const } }] }
+        : {}),
+    };
+    const orderBy = params.sort === 'name-desc' ? ({ name: 'desc' } as const) : ({ name: 'asc' } as const);
+
+    const [total, orgs] = await Promise.all([
+      this.prisma.organization.count({ where }),
+      this.prisma.organization.findMany({ where, orderBy, take: limit, skip: offset }),
+    ]);
+
+    return {
+      total,
+      items: orgs.map((o) => ({ id: o.id, name: o.slug, title: o.name, description: o.description })),
+    };
   }
 
   async countByOrganization(): Promise<Record<string, { sources: number; charts: number }>> {

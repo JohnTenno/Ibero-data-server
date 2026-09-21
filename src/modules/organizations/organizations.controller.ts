@@ -1,13 +1,18 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { OrgRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { OrgRolesGuard } from '../../shared/guards/org-roles.guard.js';
 import { OrgRoles } from '../../shared/decorators/org-roles.decorator.js';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/jwt-payload.interface.js';
-import { OrganizationsService } from './organizations.service.js';
+import { OrganizationsService, type OrganizationSort } from './organizations.service.js';
 import { CreateOrganizationDto } from './dto/create-organization.dto.js';
 import { AddMemberDto } from './dto/add-member.dto.js';
+
+function parseTerms(value: string | string[] | undefined): string[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 @Controller('organizations')
 @UseGuards(JwtAuthGuard, OrgRolesGuard)
@@ -15,8 +20,20 @@ export class OrganizationsController {
   constructor(private readonly organizationsService: OrganizationsService) {}
 
   @Get()
-  findAll() {
-    return this.organizationsService.findAll();
+  findAll(
+    @Query('q') q?: string,
+    @Query('term') term?: string | string[],
+    @Query('sort') sort?: OrganizationSort,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.organizationsService.findAll({
+      q,
+      terms: parseTerms(term),
+      sort,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      offset: offset !== undefined ? Number(offset) : undefined,
+    });
   }
 
   @Get('recent')

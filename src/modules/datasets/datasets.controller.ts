@@ -1,12 +1,17 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { OrgRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { OrgRolesGuard } from '../../shared/guards/org-roles.guard.js';
 import { OrgRoles } from '../../shared/decorators/org-roles.decorator.js';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/jwt-payload.interface.js';
-import { DatasetsService } from './datasets.service.js';
+import { DatasetsService, type DatasetSort } from './datasets.service.js';
 import { CreateDatasetDto } from './dto/create-dataset.dto.js';
+
+function parseTerms(value: string | string[] | undefined): string[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 @Controller('organizations/:organizationId/datasets')
 @UseGuards(JwtAuthGuard, OrgRolesGuard)
@@ -14,8 +19,21 @@ export class DatasetsController {
   constructor(private readonly datasetsService: DatasetsService) {}
 
   @Get()
-  findAll(@Param('organizationId') organizationId: string) {
-    return this.datasetsService.findAllByOrganization(organizationId);
+  findAll(
+    @Param('organizationId') organizationId: string,
+    @Query('q') q?: string,
+    @Query('term') term?: string | string[],
+    @Query('sort') sort?: DatasetSort,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.datasetsService.findAllByOrganization(organizationId, {
+      q,
+      terms: parseTerms(term),
+      sort,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      offset: offset !== undefined ? Number(offset) : undefined,
+    });
   }
 
   @Get(':datasetId')
