@@ -45,6 +45,19 @@ export interface SurveySummary {
   datasets: SurveyDatasetSummary[];
 }
 
+export interface ListSurveysParams {
+  limit?: number;
+  offset?: number;
+}
+
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 200;
+
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LIMIT;
+  return Math.min(Math.max(Math.trunc(limit), 1), MAX_LIMIT);
+}
+
 export interface DatasetInfo {
   id: string;
   name: string;
@@ -96,17 +109,26 @@ export class HarmonizerService {
     private readonly analysisService: AnalysisService,
   ) {}
 
-  async listSurveys(): Promise<SurveySummary[]> {
-    const surveys = await this.prisma.harmonizerSurvey.findMany({
-      orderBy: { name: 'asc' },
-      include: {
-        datasets: {
-          orderBy: [{ year: 'asc' }, { createdAt: 'asc' }],
-          include: { _count: { select: { mappings: true } } },
+  async listSurveys(
+    params: ListSurveysParams = {},
+  ): Promise<{ total: number; items: SurveySummary[] }> {
+    const limit = clampLimit(params.limit);
+    const offset = Math.max(params.offset ?? 0, 0);
+    const [total, surveys] = await Promise.all([
+      this.prisma.harmonizerSurvey.count(),
+      this.prisma.harmonizerSurvey.findMany({
+        orderBy: { name: 'asc' },
+        take: limit,
+        skip: offset,
+        include: {
+          datasets: {
+            orderBy: [{ year: 'asc' }, { createdAt: 'asc' }],
+            include: { _count: { select: { mappings: true } } },
+          },
         },
-      },
-    });
-    return surveys.map((s) => ({
+      }),
+    ]);
+    const items = surveys.map((s) => ({
       id: s.id,
       name: s.name,
       description: s.description,
@@ -119,6 +141,7 @@ export class HarmonizerService {
         totalColumns: d.columns.length,
       })),
     }));
+    return { total, items };
   }
 
   async createSurvey(dto: CreateSurveyDto) {

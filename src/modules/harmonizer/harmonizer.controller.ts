@@ -29,8 +29,14 @@ export class HarmonizerController {
   constructor(private readonly harmonizerService: HarmonizerService) {}
 
   @Get('surveys')
-  listSurveys() {
-    return this.harmonizerService.listSurveys();
+  listSurveys(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.harmonizerService.listSurveys({
+      limit: limit !== undefined ? Number(limit) : undefined,
+      offset: offset !== undefined ? Number(offset) : undefined,
+    });
   }
 
   @Post('surveys')
