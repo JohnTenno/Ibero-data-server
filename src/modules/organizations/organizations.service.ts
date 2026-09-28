@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { OrgRole, type Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LocalStorageService } from '../storage/local-storage.service.js';
@@ -104,7 +104,15 @@ export class OrganizationsService {
     return org;
   }
 
-  create(dto: CreateOrganizationDto, creatorId: string) {
+  async create(dto: CreateOrganizationDto, creatorId: string) {
+    const existingSlug = await this.prisma.organization.findUnique({ where: { slug: dto.slug } });
+    if (existingSlug) {
+      throw new ConflictException({
+        code: 'organization_slug_taken',
+        message: 'An organization with that slug already exists.',
+      });
+    }
+
     return this.prisma.organization.create({
       data: {
         name: dto.name,
