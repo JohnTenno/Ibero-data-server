@@ -4,14 +4,49 @@ import { JwtService } from '@nestjs/jwt';
 import { randomBytes } from 'node:crypto';
 import type { AuthenticatedUser, JwtPayload } from '../auth/jwt-payload.interface.js';
 
+export interface IberoContext {
+  apiUrl: string;
+  organizationId: string;
+  organizationName: string;
+  datasetId: string;
+  datasetTitle: string;
+  resourceId?: string;
+  resourceName?: string;
+  analysisId?: string;
+  analysisTitle?: string;
+  publishToken?: string;
+}
+
+export interface CanvasTable {
+  tableName: string;
+  resourceId: string;
+  downloadUrl: string;
+}
+
+export interface CanvasHandoff {
+  state: Record<string, unknown>;
+  tables: CanvasTable[];
+}
+
 export interface HandoffPayload {
   username: string;
   displayName: string;
   downloadToken: string;
+  ibero?: IberoContext;
+  canvas?: CanvasHandoff;
 }
+
+export interface PublishTokenPayload extends JwtPayload {
+  purpose: typeof PUBLISH_PURPOSE;
+  organizationId: string;
+  datasetId: string;
+}
+
+export const PUBLISH_PURPOSE = 'vizcanvas_publish';
 
 const TTL_MS = 300_000;
 const DOWNLOAD_TOKEN_TTL = '10m';
+const PUBLISH_TOKEN_TTL = '12h';
 
 @Injectable()
 export class HandoffService {
@@ -22,8 +57,13 @@ export class HandoffService {
     private readonly configService: ConfigService,
   ) {}
 
-  buildResourceHandoffUrl(user: AuthenticatedUser, downloadUrl: string, filename: string): string {
-    const token = this.createToken(user);
+  buildResourceHandoffUrl(
+    user: AuthenticatedUser,
+    downloadUrl: string,
+    filename: string,
+    ibero?: Omit<IberoContext, 'apiUrl' | 'publishToken'>,
+  ): string {
+    const token = this.createToken(user, ibero ? this.withPublishToken(user, ibero) : undefined);
     const params = new URLSearchParams({
       handoff: token,
       ckan_url: this.apiBaseUrl(),
@@ -40,8 +80,9 @@ export class HandoffService {
     source: { downloadUrl: string; filename: string },
     vizCanvasRecipe: Record<string, unknown>,
     joinResources: { alias: string; downloadUrl: string; filename: string }[] = [],
+    ibero?: Omit<IberoContext, 'apiUrl' | 'publishToken'>,
   ): string {
-    const token = this.createToken(user);
+    const token = this.createToken(user, ibero ? this.withPublishToken(user, ibero) : undefined);
     const pipeline = Buffer.from(JSON.stringify(vizCanvasRecipe)).toString('base64url');
     const params = new URLSearchParams({
       handoff: token,
@@ -64,6 +105,23 @@ export class HandoffService {
     return `${this.vizcanvasUrl()}?${params.toString()}`;
   }
 
+  buildCanvasHandoffUrl(
+    user: AuthenticatedUser,
+    canvas: CanvasHandoff,
+    ibero?: Omit<IberoContext, 'apiUrl' | 'publishToken'>,
+  ): string {
+    const token = this.createToken(user, ibero ? this.withPublishToken(user, ibero) : undefined, canvas);
+    const params = new URLSearchParams({ handoff: token, ckan_url: this.apiBaseUrl() });
+    return `${this.vizcanvasUrl()}?${params.toString()}`;
+  }
+
+  createDownloadToken(user: AuthenticatedUser): string {
+    return this.jwtService.sign(
+      { sub: user.id, email: user.email, isSysadmin: user.isSysadmin } satisfies JwtPayload,
+      { expiresIn: DOWNLOAD_TOKEN_TTL },
+    );
+  }
+
   consume(token: string): HandoffPayload | null {
     const entry = this.store.get(token);
     this.store.delete(token);
@@ -73,18 +131,33 @@ export class HandoffService {
     return entry.payload;
   }
 
-  private createToken(user: AuthenticatedUser): string {
+  private createToken(user: AuthenticatedUser, ibero?: IberoContext, canvas?: CanvasHandoff): string {
     this.sweep();
-    const downloadToken = this.jwtService.sign(
-      { sub: user.id, email: user.email, isSysadmin: user.isSysadmin } satisfies JwtPayload,
-      { expiresIn: DOWNLOAD_TOKEN_TTL },
-    );
+    const downloadToken = this.createDownloadToken(user);
     const token = randomBytes(32).toString('base64url');
     this.store.set(token, {
-      payload: { username: user.email, displayName: user.fullName, downloadToken },
+      payload: { username: user.email, displayName: user.fullName, downloadToken, ibero, canvas },
       expiresAt: Date.now() + TTL_MS,
     });
     return token;
+  }
+
+  private withPublishToken(
+    user: AuthenticatedUser,
+    ibero: Omit<IberoContext, 'apiUrl' | 'publishToken'>,
+  ): IberoContext {
+    const publishToken = this.jwtService.sign(
+      {
+        sub: user.id,
+        email: user.email,
+        isSysadmin: user.isSysadmin,
+        purpose: PUBLISH_PURPOSE,
+        organizationId: ibero.organizationId,
+        datasetId: ibero.datasetId,
+      } satisfies PublishTokenPayload,
+      { expiresIn: PUBLISH_TOKEN_TTL },
+    );
+    return { ...ibero, apiUrl: this.apiBaseUrl(), publishToken };
   }
 
   private safeName(name: string): string {

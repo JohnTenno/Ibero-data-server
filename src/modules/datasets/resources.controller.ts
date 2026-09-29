@@ -76,8 +76,15 @@ export class ResourcesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     const resource = await this.resourcesService.findOne(datasetId, resourceId);
+    const context = await this.resourcesService.handoffContext(organizationId, datasetId);
     const downloadUrl = this.downloadUrl(organizationId, datasetId, resourceId);
-    return { url: this.handoffService.buildResourceHandoffUrl(user, downloadUrl, resource.filename) };
+    return {
+      url: this.handoffService.buildResourceHandoffUrl(user, downloadUrl, resource.filename, {
+        ...context,
+        resourceId: resource.id,
+        resourceName: resource.filename,
+      }),
+    };
   }
 
   private downloadUrl(organizationId: string, datasetId: string, resourceId: string): string {

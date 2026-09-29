@@ -5,6 +5,7 @@ import { LocalStorageService } from '../storage/local-storage.service.js';
 import { AnalysisService, type QueryResult } from '../analysis/analysis.service.js';
 import { stepsToInternal, toVizCanvasRecipe, type Step } from '../analysis/recipe.js';
 import { HandoffService } from '../handoff/handoff.service.js';
+import type { VizcanvasRecipe } from '../analyses/analyses.service.js';
 import type { AuthenticatedUser } from '../auth/jwt-payload.interface.js';
 
 const DEFAULT_LIMIT = 24;
@@ -221,11 +222,24 @@ export class PublicService {
       });
     }
 
+    const base = this.handoffService.apiBaseUrl();
+
+    if (analysis.origin === 'VIZCANVAS' && analysis.vizcanvasRecipe) {
+      const canvas = analysis.vizcanvasRecipe as unknown as VizcanvasRecipe;
+      const url = this.handoffService.buildCanvasHandoffUrl(PUBLIC_VISITOR, {
+        state: canvas.state,
+        tables: canvas.tables.map((t) => ({
+          ...t,
+          downloadUrl: `${base}/public/catalog/${analysis.slug}/resources/${t.resourceId}/download`,
+        })),
+      });
+      return { url };
+    }
+
     const steps = Array.isArray(analysis.recipe) ? (analysis.recipe as unknown as Step[]) : [];
     const recipe = stepsToInternal(steps);
     const vizCanvasRecipe = toVizCanvasRecipe(recipe);
 
-    const base = this.handoffService.apiBaseUrl();
     const resultDownloadUrl = `${base}/public/catalog/${analysis.slug}/download`;
     const sourceDownloadUrl = `${base}/public/catalog/${analysis.slug}/resources/${analysis.sourceResource.id}/download`;
 

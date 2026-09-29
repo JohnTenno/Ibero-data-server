@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { OrgRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { OrgRolesGuard } from '../../shared/guards/org-roles.guard.js';
@@ -8,7 +8,7 @@ import type { AuthenticatedUser } from '../auth/jwt-payload.interface.js';
 import { OP_CATALOG, stepsToInternal, toVizCanvasRecipe } from '../analysis/recipe.js';
 import { ResourcesService } from '../datasets/resources.service.js';
 import { HandoffService } from '../handoff/handoff.service.js';
-import { AnalysesService } from './analyses.service.js';
+import { AnalysesService, type VizcanvasRecipe } from './analyses.service.js';
 import { PreviewAnalysisDto } from './dto/preview-analysis.dto.js';
 import { CreateAnalysisDto } from './dto/create-analysis.dto.js';
 
@@ -83,11 +83,32 @@ export class AnalysesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     const analysis = await this.analysesService.findOne(datasetId, analysisId);
-    const sourceResource = await this.resourcesService.findOne(datasetId, analysis.sourceResourceId);
-
+    const context = await this.resourcesService.handoffContext(organizationId, datasetId);
     const base = this.handoffService.apiBaseUrl();
+    const resourceDownloadUrl = (resourceId: string) =>
+      `${base}/organizations/${organizationId}/datasets/${datasetId}/resources/${resourceId}/download`;
+
+    if (analysis.origin === 'VIZCANVAS') {
+      const recipe = analysis.vizcanvasRecipe as unknown as VizcanvasRecipe | null;
+      if (!recipe) {
+        throw new BadRequestException({
+          code: 'vizcanvas_recipe_missing',
+          message: 'This analysis does not have a VizCanvas recipe.',
+        });
+      }
+      const url = this.handoffService.buildCanvasHandoffUrl(
+        user,
+        {
+          state: recipe.state,
+          tables: recipe.tables.map((t) => ({ ...t, downloadUrl: resourceDownloadUrl(t.resourceId) })),
+        },
+        { ...context, resourceId: analysis.sourceResourceId, analysisId: analysis.id, analysisTitle: analysis.title },
+      );
+      return { url };
+    }
+
+    const sourceResource = await this.resourcesService.findOne(datasetId, analysis.sourceResourceId);
     const resultDownloadUrl = `${base}/organizations/${organizationId}/datasets/${datasetId}/analyses/${analysisId}/download`;
-    const sourceDownloadUrl = `${base}/organizations/${organizationId}/datasets/${datasetId}/resources/${sourceResource.id}/download`;
 
     const recipe = stepsToInternal(analysis.recipe as { op: string; params?: Record<string, unknown> }[]);
     const vizCanvasRecipe = toVizCanvasRecipe(recipe);
@@ -97,7 +118,7 @@ export class AnalysesController {
         const joinResource = await this.resourcesService.findOne(datasetId, join.resourceId);
         return {
           alias: join.alias,
-          downloadUrl: `${base}/organizations/${organizationId}/datasets/${datasetId}/resources/${joinResource.id}/download`,
+          downloadUrl: resourceDownloadUrl(joinResource.id),
           filename: joinResource.filename,
         };
       }),
@@ -106,9 +127,10 @@ export class AnalysesController {
     const url = this.handoffService.buildAnalysisHandoffUrl(
       user,
       { downloadUrl: resultDownloadUrl, filename: `${analysis.title}.parquet` },
-      { downloadUrl: sourceDownloadUrl, filename: sourceResource.filename },
+      { downloadUrl: resourceDownloadUrl(sourceResource.id), filename: sourceResource.filename },
       vizCanvasRecipe,
       joinResources,
+      { ...context, resourceId: sourceResource.id, resourceName: sourceResource.filename },
     );
     return { url };
   }

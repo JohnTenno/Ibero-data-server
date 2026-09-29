@@ -23,6 +23,8 @@ export class CkanCompatController {
         username: payload.username,
         display_name: payload.displayName,
         download_token: payload.downloadToken,
+        ibero_context: payload.ibero ?? null,
+        canvas: payload.canvas ?? null,
       },
     };
   }

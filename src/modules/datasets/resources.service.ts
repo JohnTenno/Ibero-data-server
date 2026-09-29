@@ -6,7 +6,7 @@ import { AnalysisService } from '../analysis/analysis.service.js';
 
 const PARQUET_MAGIC = Buffer.from('PAR1', 'ascii');
 
-function looksLikeParquet(buffer: Buffer): boolean {
+export function looksLikeParquet(buffer: Buffer): boolean {
   return (
     buffer.length > 8 &&
     buffer.subarray(0, 4).equals(PARQUET_MAGIC) &&
@@ -24,6 +24,22 @@ export class ResourcesService {
 
   findAll(datasetId: string) {
     return this.prisma.resource.findMany({ where: { datasetId }, orderBy: { createdAt: 'desc' } });
+  }
+
+  async handoffContext(organizationId: string, datasetId: string) {
+    const dataset = await this.prisma.dataset.findFirst({
+      where: { id: datasetId, organizationId },
+      select: { title: true, organization: { select: { name: true } } },
+    });
+    if (!dataset) {
+      throw new NotFoundException({ code: 'dataset_not_found', message: 'Dataset not found.' });
+    }
+    return {
+      organizationId,
+      organizationName: dataset.organization.name,
+      datasetId,
+      datasetTitle: dataset.title,
+    };
   }
 
   async findOne(datasetId: string, resourceId: string) {
