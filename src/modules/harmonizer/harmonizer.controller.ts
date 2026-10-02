@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -18,6 +19,7 @@ import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { HarmonizerService, type ExportFile } from './harmonizer.service.js';
 import { CreateSurveyDto } from './dto/create-survey.dto.js';
+import { UpdateSurveyDto } from './dto/update-survey.dto.js';
 import { UploadDatasetDto } from './dto/upload-dataset.dto.js';
 import { SaveMappingDto } from './dto/save-mapping.dto.js';
 
@@ -42,6 +44,21 @@ export class HarmonizerController {
   @Post('surveys')
   createSurvey(@Body() dto: CreateSurveyDto) {
     return this.harmonizerService.createSurvey(dto);
+  }
+
+  @Get('surveys/:surveyId')
+  async survey(@Param('surveyId') surveyId: string) {
+    return this.harmonizerService.toSurveyDto(
+      await this.harmonizerService.getSurvey(surveyId),
+    );
+  }
+
+  @Patch('surveys/:surveyId')
+  updateSurvey(
+    @Param('surveyId') surveyId: string,
+    @Body() dto: UpdateSurveyDto,
+  ) {
+    return this.harmonizerService.updateSurvey(surveyId, dto);
   }
 
   @Get('surveys/:surveyId/harmonized')

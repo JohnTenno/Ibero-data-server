@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -27,6 +28,7 @@ import {
   type MappingChoiceDto,
 } from './dto/mapping-choice.dto.js';
 import type { CreateSurveyDto } from './dto/create-survey.dto.js';
+import type { UpdateSurveyDto } from './dto/update-survey.dto.js';
 import type { SaveMappingDto } from './dto/save-mapping.dto.js';
 
 export interface SurveyDatasetSummary {
@@ -156,7 +158,10 @@ export class HarmonizerService {
       where: { name },
     });
     if (existing) {
-      return this.toSurveyDto(existing);
+      throw new ConflictException({
+        code: 'survey_name_taken',
+        message: 'A survey with that name already exists.',
+      });
     }
     const created = await this.prisma.harmonizerSurvey.create({
       data: { name, description: dto.description?.trim() || null },
@@ -177,7 +182,44 @@ export class HarmonizerService {
     return survey;
   }
 
-  private toSurveyDto(survey: {
+  async updateSurvey(surveyId: string, dto: UpdateSurveyDto) {
+    const survey = await this.getSurvey(surveyId);
+    const data: Prisma.HarmonizerSurveyUpdateInput = {};
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) {
+        throw new BadRequestException({
+          code: 'survey_name_required',
+          message: 'Survey name cannot be empty.',
+        });
+      }
+      if (name !== survey.name) {
+        const existing = await this.prisma.harmonizerSurvey.findUnique({
+          where: { name },
+        });
+        if (existing) {
+          throw new ConflictException({
+            code: 'survey_name_taken',
+            message: 'A survey with that name already exists.',
+          });
+        }
+        data.name = name;
+      }
+    }
+
+    if (dto.description !== undefined) {
+      data.description = dto.description.trim() || null;
+    }
+
+    const updated = await this.prisma.harmonizerSurvey.update({
+      where: { id: surveyId },
+      data,
+    });
+    return this.toSurveyDto(updated);
+  }
+
+  toSurveyDto(survey: {
     id: string;
     name: string;
     description: string | null;
