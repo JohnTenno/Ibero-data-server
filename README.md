@@ -158,6 +158,7 @@ Roles inside an organization: `ADMIN`, `EDITOR`, `MEMBER`.
 
 Rules:
 
+- Every route with `:organizationId` first checks that the organization exists and returns `404 organization_not_found` if it does not. This happens before the role check, so it applies to sysadmins too, and a missing organization never returns `403`.
 - A sysadmin passes every role check in every organization.
 - "Any user" means any logged-in user, member or not.
 - The creator of an organization becomes its `ADMIN`.

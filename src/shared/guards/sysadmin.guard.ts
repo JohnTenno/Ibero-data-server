@@ -1,4 +1,9 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { SYSADMIN_ONLY_KEY } from '../decorators/sysadmin.decorator.js';
 import type { AuthenticatedUser } from '../../modules/auth/jwt-payload.interface.js';
@@ -8,7 +13,10 @@ export class SysadminGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const requiresSysadmin = this.reflector.get<boolean>(SYSADMIN_ONLY_KEY, context.getHandler());
+    const requiresSysadmin = this.reflector.get<boolean>(
+      SYSADMIN_ONLY_KEY,
+      context.getHandler(),
+    );
     if (!requiresSysadmin) {
       return true;
     }
